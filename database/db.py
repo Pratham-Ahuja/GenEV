@@ -24,9 +24,9 @@ CREATE TABLE IF NOT EXISTS simulation_runs (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at   TEXT    NOT NULL,
     prompt       TEXT    NOT NULL,
-    params       TEXT    NOT NULL,   -- JSON blob
-    metrics      TEXT    NOT NULL,   -- JSON blob
-    insights     TEXT    NOT NULL,   -- JSON array of strings
+    params       TEXT    NOT NULL,
+    metrics      TEXT    NOT NULL,
+    insights     TEXT    NOT NULL,
     duration_sec REAL
 );
 
@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS telemetry_points (
     temp_c         REAL,
     current_a      REAL,
     charge_rate_kw REAL,
-    regen_kw       REAL
+    regen_kw       REAL,
+    is_charging    INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_telemetry_run ON telemetry_points(run_id);
@@ -104,8 +105,8 @@ def save_run(
             """
             INSERT INTO telemetry_points
                 (run_id, time_min, speed_kmh, battery_pct, voltage_v,
-                 temp_c, current_a, charge_rate_kw, regen_kw)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 temp_c, current_a, charge_rate_kw, regen_kw, is_charging)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -118,6 +119,7 @@ def save_run(
                     row.get("current_a"),
                     row.get("charge_rate_kw"),
                     row.get("regen_kw"),
+                    int(row.get("is_charging", False)),
                 )
                 for row in telemetry
             ],
@@ -167,7 +169,7 @@ def get_run_by_id(run_id: int) -> Optional[dict]:
         telemetry_rows = conn.execute(
             """
             SELECT time_min, speed_kmh, battery_pct, voltage_v,
-                   temp_c, current_a, charge_rate_kw, regen_kw
+                   temp_c, current_a, charge_rate_kw, regen_kw, is_charging
             FROM telemetry_points
             WHERE run_id = ?
             ORDER BY time_min
@@ -176,14 +178,17 @@ def get_run_by_id(run_id: int) -> Optional[dict]:
         ).fetchall()
 
     return {
-        "id": row["id"],
-        "created_at": row["created_at"],
-        "prompt": row["prompt"],
-        "params": json.loads(row["params"]),
-        "metrics": json.loads(row["metrics"]),
-        "insights": json.loads(row["insights"]),
-        "duration_sec": row["duration_sec"],
-        "telemetry": [dict(t) for t in telemetry_rows],
+        "id":          row["id"],
+        "created_at":  row["created_at"],
+        "prompt":      row["prompt"],
+        "params":      json.loads(row["params"]),
+        "metrics":     json.loads(row["metrics"]),
+        "insights":    json.loads(row["insights"]),
+        "duration_sec":row["duration_sec"],
+        "telemetry": [
+            {**dict(t), "is_charging": bool(t["is_charging"])}
+            for t in telemetry_rows
+        ],
     }
 
 

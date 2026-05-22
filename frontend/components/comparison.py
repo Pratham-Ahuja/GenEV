@@ -178,32 +178,28 @@ def _render_metric_diff_table(runs: List[dict]) -> None:
 
     # Header row
     run_headers = "".join([
-        f'<th style="text-align:center; color:{_RUN_COLORS[i]}; '
-        f'font-size:12px; padding:8px 12px;">Run #{r["id"]}</th>'
+        f'<th style="text-align:center;color:{_RUN_COLORS[i]};'
+        f'font-size:12px;padding:8px 12px;">Run #{r["id"]}</th>'
         for i, r in enumerate(runs)
     ])
 
-    header = f"""
-    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
-        <th style="text-align:left; color:#94A3B8;
-                   font-size:12px; padding:8px 12px;">Metric</th>
-        {run_headers}
-    </tr>
-    """
+    header = (
+        f'<tr style="border-bottom:1px solid #E2E8F0;">'
+        f'<th style="text-align:left;color:#0A0A0A;font-size:12px;padding:8px 12px;">Metric</th>'
+        f'{run_headers}'
+        f'</tr>'
+    )
 
-    # Data rows
     ref_metrics = runs[0].get("metrics", {})
     rows_html   = ""
 
     for i, (key, label, higher_better, unit) in enumerate(metric_defs):
-        bg = "rgba(255,255,255,0.02)" if i % 2 == 0 else "transparent"
+        bg = "#F8FAFC" if i % 2 == 0 else "#FFFFFF"
 
-        cells = f"""
-        <td style="padding:9px 12px; font-size:13px; color:#94A3B8;
-                   border-bottom:1px solid rgba(255,255,255,0.04);">
-            {label}
-        </td>
-        """
+        cells = (
+            f'<td style="padding:9px 12px;font-size:13px;color:#0A0A0A;'
+            f'border-bottom:1px solid #E2E8F0;">{label}</td>'
+        )
 
         for j, run in enumerate(runs):
             m     = run.get("metrics", {})
@@ -216,36 +212,26 @@ def _render_metric_diff_table(runs: List[dict]) -> None:
                 ref_val    = ref_metrics.get(key, 0)
                 delta_html = _delta_html(val, ref_val, higher_better)
 
-            cells += f"""
-            <td style="
-                text-align:center;
-                padding:9px 12px;
-                border-bottom:1px solid rgba(255,255,255,0.04);
-            ">
-                <span style="font-size:14px; font-weight:600; color:{color};">
-                    {val:.1f}
-                </span>
-                <span style="font-size:11px; color:#64748B;">{unit}</span>
-                {delta_html}
-            </td>
-            """
+            cells += (
+                f'<td style="text-align:center;padding:9px 12px;'
+                f'border-bottom:1px solid #E2E8F0;">'
+                f'<span style="font-size:14px;font-weight:600;color:{color};">{val:.1f}</span>'
+                f'<span style="font-size:11px;color:#475569;">{unit}</span>'
+                f'{delta_html}'
+                f'</td>'
+            )
 
         rows_html += f'<tr style="background:{bg};">{cells}</tr>'
 
-    st.markdown(f"""
-    <div style="
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        overflow-x: auto;
-        margin-bottom: 16px;
-    ">
-        <table style="width:100%; border-collapse:collapse;">
-            <thead>{header}</thead>
-            <tbody>{rows_html}</tbody>
-        </table>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="border:1px solid #E2E8F0;border-radius:12px;'
+        f'overflow-x:auto;margin-bottom:16px;">'
+        f'<table style="width:100%;border-collapse:collapse;">'
+        f'<thead>{header}</thead>'
+        f'<tbody>{rows_html}</tbody>'
+        f'</table></div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
