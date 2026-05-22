@@ -22,12 +22,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import streamlit as st
 
 from config import APP_TITLE, APP_VERSION
-from database.db import init_db, get_all_runs, get_run_by_id, delete_run
+from database.db import init_db, get_all_runs, get_run_by_id, delete_run, save_run
 from simulation_engine.scenario_parser import parse_scenario
 from simulation_engine.simulator import run_simulation
 from simulation_engine.metrics import compute_metrics
 from ai_insights.insight_engine import generate_insights
-from database.db import save_run
 
 from frontend.components.charts import (
     battery_chart,
@@ -62,50 +61,12 @@ st.set_page_config(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Global CSS
+# Global CSS — light theme compatible, no dark overrides
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
-    /* Base */
-    .stApp { background-color: #0F1117; }
-
-    /* Hide default Streamlit header */
-    header[data-testid="stHeader"] { background: transparent; }
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 10px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 6px 18px;
-        font-size: 13px;
-        color: #94A3B8;
-    }
-    .stTabs [aria-selected="true"] {
-        background: rgba(29,158,117,0.15) !important;
-        color: #1D9E75 !important;
-        font-weight: 600;
-    }
-
-    /* Input */
-    .stTextArea textarea {
-        background: rgba(255,255,255,0.04) !important;
-        border: 1px solid rgba(255,255,255,0.10) !important;
-        border-radius: 10px !important;
-        color: #E2E8F0 !important;
-        font-size: 14px !important;
-    }
-    .stTextArea textarea:focus {
-        border-color: #1D9E75 !important;
-        box-shadow: 0 0 0 2px rgba(29,158,117,0.20) !important;
-    }
-
-    /* Buttons */
+    /* ── Buttons ── */
     .stButton > button {
         background: linear-gradient(135deg, #1D9E75, #15795A) !important;
         color: white !important;
@@ -118,33 +79,44 @@ st.markdown("""
     }
     .stButton > button:hover { opacity: 0.88 !important; }
 
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background: rgba(255,255,255,0.02) !important;
-        border-right: 1px solid rgba(255,255,255,0.06) !important;
+    /* ── Tabs ── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        border-radius: 10px;
+        padding: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        padding: 6px 18px;
+        font-size: 13px;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(29,158,117,0.15) !important;
+        color: #1D9E75 !important;
+        font-weight: 600;
     }
 
-    /* Divider */
-    hr { border-color: rgba(255,255,255,0.06) !important; }
+    /* ── Text area ── */
+    .stTextArea textarea {
+        border: 1.5px solid #CBD5E1 !important;
+        border-radius: 10px !important;
+        font-size: 14px !important;
+    }
+    .stTextArea textarea:focus {
+        border-color: #1D9E75 !important;
+        box-shadow: 0 0 0 2px rgba(29,158,117,0.20) !important;
+    }
 
-    /* Plotly chart background */
-    .js-plotly-plot .plotly { background: transparent !important; }
-
-    /* Multiselect */
+    /* ── Multiselect tags ── */
     .stMultiSelect [data-baseweb="tag"] {
         background: rgba(29,158,117,0.20) !important;
         color: #1D9E75 !important;
     }
 
-    /* Selectbox */
-    .stSelectbox [data-baseweb="select"] {
-        background: rgba(255,255,255,0.04) !important;
-    }
-
-    /* Spinner */
+    /* ── Spinner ── */
     .stSpinner > div { border-top-color: #1D9E75 !important; }
 
-    /* Success / info / warning boxes */
+    /* ── Alert boxes ── */
     .stAlert { border-radius: 10px !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -166,10 +138,11 @@ _init()
 # Session state defaults
 # ─────────────────────────────────────────────────────────────────────────────
 
-if "last_result"  not in st.session_state: st.session_state.last_result  = None
-if "last_metrics" not in st.session_state: st.session_state.last_metrics = None
-if "last_run_id"  not in st.session_state: st.session_state.last_run_id  = None
-if "history"      not in st.session_state: st.session_state.history      = []
+if "last_result"    not in st.session_state: st.session_state.last_result    = None
+if "last_metrics"   not in st.session_state: st.session_state.last_metrics   = None
+if "last_run_id"    not in st.session_state: st.session_state.last_run_id    = None
+if "preset_prompt"  not in st.session_state: st.session_state.preset_prompt  = ""
+if "prompt_input"   not in st.session_state: st.session_state.prompt_input   = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,18 +170,18 @@ def _render_sidebar():
         # Quick scenario presets
         st.markdown("**⚡ Quick Presets**")
         presets = {
-            "🌡️ Delhi Summer":     "Simulate an EV driving in extreme Delhi summer traffic with repeated fast charging.",
-            "❄️ Cold + Hilly":     "Simulate cold-weather EV driving on hilly terrain with aggressive acceleration.",
-            "🛣️ Highway Eco":      "Simulate EV on a long highway cruise with eco driving and slow charging.",
-            "🌧️ Monsoon Traffic":  "Simulate EV in heavy monsoon rain with stop-and-go city traffic.",
-            "🏔️ Mountain Drive":   "Simulate EV on mountainous terrain with aggressive driving and no charging.",
-            "🌙 Night Urban":      "Simulate EV in moderate urban traffic at night with mild temperatures.",
+            "🌡️ Delhi Summer":    "Simulate an EV driving in extreme Delhi summer traffic with repeated fast charging.",
+            "❄️ Cold + Hilly":    "Simulate cold-weather EV driving on hilly terrain with aggressive acceleration.",
+            "🛣️ Highway Eco":     "Simulate EV on a long highway cruise with eco driving and slow charging.",
+            "🌧️ Monsoon Traffic": "Simulate EV in heavy monsoon rain with stop-and-go city traffic.",
+            "🏔️ Mountain Drive":  "Simulate EV on mountainous terrain with aggressive driving and no charging.",
+            "🌙 Night Urban":     "Simulate EV in moderate urban traffic at night with mild temperatures.",
         }
 
         for label, prompt in presets.items():
             if st.button(label, use_container_width=True, key=f"preset_{label}"):
                 st.session_state["preset_prompt"] = prompt
-                st.rerun()
+                st.session_state["prompt_input"]  = prompt
 
         st.divider()
 
@@ -219,9 +192,9 @@ def _render_sidebar():
             st.caption("No runs yet. Run your first simulation!")
         else:
             for run in history:
-                m = run["metrics"]
+                m       = run["metrics"]
                 overall = m.get("overall_score", 0)
-                color = (
+                color   = (
                     "#1D9E75" if overall >= 70 else
                     "#D97706" if overall >= 45 else
                     "#DC2626"
@@ -232,7 +205,7 @@ def _render_sidebar():
                     padding: 6px 10px;
                     margin-bottom: 6px;
                     border-radius: 4px;
-                    background: rgba(255,255,255,0.02);
+                    background: rgba(0,0,0,0.03);
                 ">
                     <div style="font-size:11px; color:{color}; font-weight:600;">
                         #{run['id']} · {overall:.0f}/100
@@ -246,7 +219,7 @@ def _render_sidebar():
                 """, unsafe_allow_html=True)
 
         st.divider()
-        st.caption("Built with Streamlit · xAI Grok · Plotly")
+        st.caption("Built with Streamlit · Groq LLaMA · Plotly")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -257,19 +230,18 @@ def _render_simulator_tab():
     st.markdown("## 🧪 EV Scenario Simulator")
     st.markdown(
         "Describe any EV operating scenario in natural language. "
-        "GenEV will parse it with Grok, generate synthetic telemetry, "
+        "GenEV will parse it with Groq, generate synthetic telemetry, "
         "simulate physics, compute metrics, and generate AI insights."
     )
 
     # ── Prompt input ──────────────────────────────────────────────────────────
-    default_prompt = st.session_state.pop("preset_prompt", "")
-
     prompt = st.text_area(
         label="Scenario Prompt",
-        value=default_prompt,
+        value=st.session_state["preset_prompt"],
         placeholder="e.g. Simulate an EV driving in extreme Delhi summer traffic with repeated fast charging.",
         height=90,
         label_visibility="collapsed",
+        key="prompt_input",
     )
 
     col_btn, col_seed, col_spacer = st.columns([2, 1, 4])
@@ -284,7 +256,9 @@ def _render_simulator_tab():
 
     # ── Run pipeline ──────────────────────────────────────────────────────────
     if run_clicked:
-        if not prompt.strip():
+        actual_prompt = st.session_state.get("prompt_input", "").strip()
+
+        if not actual_prompt:
             st.warning("Please enter a scenario prompt first.", icon="⚠️")
             return
 
@@ -292,8 +266,8 @@ def _render_simulator_tab():
 
         with st.status("Running GenEV simulation pipeline...", expanded=True) as status:
 
-            st.write("🔍 Step 1 — Parsing scenario with Grok...")
-            params = parse_scenario(prompt)
+            st.write("🔍 Step 1 — Parsing scenario with Groq...")
+            params = parse_scenario(actual_prompt)
             st.write(f"✅ Extracted {len(params)} parameters")
 
             st.write("📡 Step 2 — Generating synthetic telemetry...")
@@ -304,13 +278,13 @@ def _render_simulator_tab():
             metrics = compute_metrics(result)
             st.write(f"✅ Overall score: {metrics['overall_score']:.1f}/100")
 
-            st.write("🤖 Step 4 — Generating AI insights with Grok...")
+            st.write("🤖 Step 4 — Generating AI insights with Groq...")
             insights = generate_insights(result, metrics)
             st.write(f"✅ Generated {len(insights)} insights")
 
             st.write("💾 Step 5 — Saving to database...")
             run_id = save_run(
-                prompt=prompt,
+                prompt=actual_prompt,
                 params=params,
                 metrics=metrics,
                 insights=insights,
@@ -324,7 +298,9 @@ def _render_simulator_tab():
                 state="complete",
             )
 
-        # Store in session
+        # Clear preset after successful run
+        st.session_state["preset_prompt"] = ""
+
         result["insights"] = insights
         st.session_state.last_result  = result
         st.session_state.last_metrics = metrics
@@ -353,10 +329,11 @@ def _render_empty_state():
     ">
         <div style="font-size:48px; margin-bottom:16px;">⚡</div>
         <div style="font-size:18px; font-weight:600;
-                    color:#94A3B8; margin-bottom:8px;">
+                    color:#334155; margin-bottom:8px;">
             Ready to simulate
         </div>
-        <div style="font-size:14px; line-height:1.7; max-width:400px; margin:0 auto;">
+        <div style="font-size:14px; line-height:1.7;
+                    max-width:400px; margin:0 auto; color:#64748B;">
             Enter a scenario prompt above or pick a preset from the sidebar.
             GenEV will generate realistic EV telemetry and AI-powered analysis.
         </div>
@@ -365,9 +342,7 @@ def _render_empty_state():
 
 
 def _render_extracted_params(params: dict):
-    """Show the LLM-extracted parameters in a collapsible section."""
     with st.expander("🔍 Extracted Scenario Parameters", expanded=False):
-        cols = st.columns(5)
         param_display = [
             ("🌡️ Temperature",   f"{params['temperature_c']}°C"),
             ("🗺️ Terrain",       params["terrain"].capitalize()),
@@ -385,21 +360,21 @@ def _render_extracted_params(params: dict):
             with cols[i % 5]:
                 st.markdown(f"""
                 <div style="
-                    background:rgba(255,255,255,0.03);
-                    border-radius:8px;
-                    padding:10px 12px;
-                    margin-bottom:8px;
-                    text-align:center;
+                    background: rgba(29,158,117,0.08);
+                    border: 1px solid rgba(29,158,117,0.20);
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                    margin-bottom: 8px;
+                    text-align: center;
                 ">
                     <div style="font-size:11px; color:#64748B;">{label}</div>
                     <div style="font-size:14px; font-weight:600;
-                                color:#E2E8F0; margin-top:2px;">{value}</div>
+                                color:#1E293B; margin-top:2px;">{value}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
 
 def _render_results(result: dict, metrics: dict):
-    """Render the full results dashboard."""
 
     # ── Overall score + grade badges ──────────────────────────────────────────
     render_overall_score(metrics, result["scenario_label"])
@@ -451,18 +426,16 @@ def _render_results(result: dict, metrics: dict):
     for i, insight in enumerate(insights):
         st.markdown(f"""
         <div style="
-            background: rgba(255,255,255,0.02);
+            background: rgba(29,158,117,0.06);
             border-left: 3px solid #1D9E75;
             border-radius: 6px;
             padding: 12px 16px;
             margin-bottom: 10px;
             font-size: 14px;
-            color: #CBD5E1;
+            color: #1E293B;
             line-height: 1.7;
         ">
-            <span style="color:#1D9E75; font-weight:600;">
-                {i + 1}.
-            </span>
+            <span style="color:#1D9E75; font-weight:600;">{i + 1}.</span>
             {insight}
         </div>
         """, unsafe_allow_html=True)
@@ -504,16 +477,16 @@ def _render_history_tab():
                 <div style="font-size:12px; color:#64748B; margin-bottom:6px;">
                     🕐 {created} UTC · Run #{run['id']}
                 </div>
-                <div style="font-size:13px; color:#CBD5E1; line-height:1.6;">
+                <div style="font-size:13px; color:#1E293B; line-height:1.6;">
                     {run['prompt']}
                 </div>
                 """, unsafe_allow_html=True)
 
             with col_metrics:
                 mini_metrics = [
-                    ("Overall",    overall,                         True),
+                    ("Overall",    overall,                          True),
                     ("Efficiency", m.get("efficiency_score", 0),    True),
-                    ("Stress",     m.get("battery_stress_index", 0),False),
+                    ("Stress",     m.get("battery_stress_index", 0), False),
                     ("Thermal",    m.get("thermal_risk_pct", 0),    False),
                 ]
                 for label, val, hib in mini_metrics:
@@ -525,8 +498,8 @@ def _render_history_tab():
                     st.markdown(f"""
                     <div style="display:flex; justify-content:space-between;
                                 padding:4px 0; font-size:12px;
-                                border-bottom:1px solid rgba(255,255,255,0.04);">
-                        <span style="color:#94A3B8;">{label}</span>
+                                border-bottom:1px solid rgba(0,0,0,0.06);">
+                        <span style="color:#64748B;">{label}</span>
                         <span style="color:{c}; font-weight:600;">{val:.1f}</span>
                     </div>
                     """, unsafe_allow_html=True)
@@ -536,7 +509,6 @@ def _render_history_tab():
                              use_container_width=True):
                     full = get_run_by_id(run["id"])
                     if full:
-                        # Reconstruct result dict
                         reconstructed = {
                             "telemetry":      full["telemetry"],
                             "summary":        _recompute_summary(full["telemetry"], full["params"]),
@@ -561,7 +533,6 @@ def _render_history_tab():
 
 
 def _recompute_summary(telemetry: list, params: dict) -> dict:
-    """Lightweight summary recompute for loaded runs (avoids re-running full sim)."""
     from simulation_engine.simulator import _compute_summary
     return _compute_summary(telemetry, params)
 
@@ -586,10 +557,11 @@ def _render_about_tab():
         padding: 20px 24px;
         margin-bottom: 20px;
     ">
-        <div style="font-size:20px; font-weight:700; color:#1D9E75; margin-bottom:8px;">
+        <div style="font-size:20px; font-weight:700;
+                    color:#1D9E75; margin-bottom:8px;">
             ⚡ GenEV — Generative AI EV Scenario Sandbox
         </div>
-        <div style="font-size:14px; color:#CBD5E1; line-height:1.8;">
+        <div style="font-size:14px; color:#1E293B; line-height:1.8;">
             GenEV is an AI-powered interactive platform that generates realistic EV
             operating scenarios from natural language prompts and simulates battery
             behaviour, thermal stress, charging efficiency, and operational risks in
@@ -603,32 +575,25 @@ def _render_about_tab():
     with col1:
         st.markdown("### 🧠 How It Works")
         pipeline = [
-            ("1", "Natural Language Prompt",    "You describe any EV scenario in plain English."),
-            ("2", "LLM Scenario Parsing",       "Grok (xAI) extracts structured parameters."),
-            ("3", "Synthetic Telemetry",        "NumPy generates realistic time-series data using EV physics."),
-            ("4", "Simulation Engine",          "Physics-based computations model battery, thermal, and power behaviour."),
-            ("5", "Metric Evaluation",          "6 metrics quantify efficiency, stress, risk, and stability."),
-            ("6", "AI Insight Generation",      "Grok explains what happened and why, with recommendations."),
+            ("1", "Natural Language Prompt",  "You describe any EV scenario in plain English."),
+            ("2", "LLM Scenario Parsing",     "Groq LLaMA extracts structured parameters."),
+            ("3", "Synthetic Telemetry",      "NumPy generates realistic time-series data using EV physics."),
+            ("4", "Simulation Engine",        "Physics-based computations model battery, thermal, and power behaviour."),
+            ("5", "Metric Evaluation",        "6 metrics quantify efficiency, stress, risk, and stability."),
+            ("6", "AI Insight Generation",    "Groq explains what happened and why, with recommendations."),
         ]
         for num, title, desc in pipeline:
             st.markdown(f"""
-            <div style="
-                display:flex; gap:14px; align-items:flex-start;
-                margin-bottom:14px;
-            ">
+            <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:14px;">
                 <div style="
                     background:#1D9E75; color:white;
                     border-radius:50%; width:26px; height:26px;
                     display:flex; align-items:center; justify-content:center;
                     font-size:12px; font-weight:700; flex-shrink:0;
-                ">
-                    {num}
-                </div>
+                ">{num}</div>
                 <div>
-                    <div style="font-size:13px; font-weight:600;
-                                color:#E2E8F0;">{title}</div>
-                    <div style="font-size:12px; color:#94A3B8;
-                                margin-top:2px; line-height:1.5;">{desc}</div>
+                    <div style="font-size:13px; font-weight:600; color:#1E293B;">{title}</div>
+                    <div style="font-size:12px; color:#64748B; margin-top:2px; line-height:1.5;">{desc}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -636,17 +601,17 @@ def _render_about_tab():
     with col2:
         st.markdown("### 🛠️ Tech Stack")
         stack = [
-            ("🤖", "xAI Grok",      "LLM for scenario parsing and insight generation"),
-            ("🌐", "Streamlit",     "Interactive web frontend"),
-            ("📊", "Plotly",        "Interactive data visualisation"),
-            ("🔢", "NumPy",         "Physics simulation and telemetry generation"),
-            ("🗄️", "SQLite",        "Persistent run storage and history"),
-            ("🐍", "Python",        "Core language — simulation engine and backend"),
+            ("🤖", "Groq LLaMA 3.3 70B", "LLM for scenario parsing and insight generation"),
+            ("🌐", "Streamlit",           "Interactive web frontend"),
+            ("📊", "Plotly",             "Interactive data visualisation"),
+            ("🔢", "NumPy",              "Physics simulation and telemetry generation"),
+            ("🗄️", "SQLite",             "Persistent run storage and history"),
+            ("🐍", "Python",             "Core language — simulation engine and backend"),
         ]
         for icon, name, desc in stack:
             st.markdown(f"""
             <div style="
-                background: rgba(255,255,255,0.03);
+                background: rgba(0,0,0,0.03);
                 border-radius: 8px;
                 padding: 10px 14px;
                 margin-bottom: 8px;
@@ -656,8 +621,7 @@ def _render_about_tab():
             ">
                 <span style="font-size:20px;">{icon}</span>
                 <div>
-                    <div style="font-size:13px; font-weight:600;
-                                color:#E2E8F0;">{name}</div>
+                    <div style="font-size:13px; font-weight:600; color:#1E293B;">{name}</div>
                     <div style="font-size:11px; color:#64748B;">{desc}</div>
                 </div>
             </div>
@@ -665,18 +629,18 @@ def _render_about_tab():
 
         st.markdown("### 📊 Metrics Computed")
         metrics_list = [
-            ("⚡", "Energy Efficiency Score",  "Distance / energy, normalised 0–100"),
-            ("🔋", "Battery Stress Index",     "Thermal + charge + accel + discharge stress"),
-            ("🌡️", "Thermal Risk Probability", "Likelihood of overheating event"),
-            ("📊", "Stability Score",          "Voltage + thermal consistency"),
-            ("🔌", "Charging Efficiency",      "Energy stored vs energy supplied"),
-            ("🤖", "AI Optimisation Gain",     "Estimated improvement from AI recommendations"),
+            ("⚡", "Energy Efficiency Score",   "Distance / energy, normalised 0–100"),
+            ("🔋", "Battery Stress Index",      "Thermal + charge + accel + discharge stress"),
+            ("🌡️", "Thermal Risk Probability",  "Likelihood of overheating event"),
+            ("📊", "Stability Score",           "Voltage + thermal consistency"),
+            ("🔌", "Charging Efficiency",       "Energy stored vs energy supplied"),
+            ("🤖", "AI Optimisation Gain",      "Estimated improvement from AI recommendations"),
         ]
         for icon, name, formula in metrics_list:
             st.markdown(f"""
             <div style="
                 padding: 7px 0;
-                border-bottom: 1px solid rgba(255,255,255,0.04);
+                border-bottom: 1px solid rgba(0,0,0,0.06);
                 font-size: 12px;
             ">
                 <span style="color:#1D9E75;">{icon} {name}</span>

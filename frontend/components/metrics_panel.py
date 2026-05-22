@@ -185,44 +185,13 @@ def render_grade_badges(metrics: dict) -> None:
         grade   = grades.get(key, "—")
         color   = _grade_color(grade)
         bg      = _grade_bg(grade)
-        badges_html += f"""
-        <span style="
-            display:inline-flex;
-            flex-direction:column;
-            align-items:center;
-            background:{bg};
-            color:{color};
-            border-radius:10px;
-            padding:6px 14px;
-            margin-right:8px;
-            font-weight:700;
-            font-size:18px;
-            min-width:60px;
-        ">
-            {grade}
-            <span style="font-size:10px; font-weight:400; margin-top:2px; color:{color};">
-                {label}
-            </span>
-        </span>
-        """
+        badges_html += f"""<span style="display:inline-flex;flex-direction:column;align-items:center;background:{bg};color:{color};border-radius:10px;padding:6px 14px;margin-right:8px;font-weight:700;font-size:18px;min-width:60px;">{grade}<span style="font-size:10px;font-weight:400;margin-top:2px;color:{color};">{label}</span></span>"""
 
-    st.markdown(f"""
-    <div style="
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        padding: 14px 18px;
-        margin-bottom: 16px;
-    ">
-        <div style="font-size:12px; color:#94A3B8; margin-bottom:10px;">
-            📋 Performance Grades
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:4px;">
-            {badges_html}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
+    st.markdown("**📋 Performance Grades**", unsafe_allow_html=False)
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:4px;padding:14px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:12px;margin-bottom:16px;">{badges_html}</div>',
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Risk Flags
