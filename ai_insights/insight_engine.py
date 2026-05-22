@@ -1,12 +1,13 @@
 """
 ai_insights/insight_engine.py
 
-Uses Grok (xAI) to generate intelligent natural language explanations
-of simulation results. Falls back to rule-based insights if API is unavailable.
+Uses Groq (LLaMA 3.3 70B) to generate intelligent natural language
+explanations of simulation results.
+Falls back to rule-based insights if API is unavailable.
 
 Output
 ------
-List of 4–6 insight strings, each explaining:
+List of 5 insight strings explaining:
 - What happened in the simulation
 - Why it happened (physics/chemistry reasoning)
 - How metrics were affected
@@ -14,19 +15,17 @@ List of 4–6 insight strings, each explaining:
 """
 
 import json
-from openai import OpenAI
+import re
+from groq import Groq
 
-from config import XAI_API_KEY, XAI_BASE_URL, GROK_MODEL
+from config import GROQ_API_KEY, GROQ_MODEL
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Grok client
+# Groq client
 # ─────────────────────────────────────────────────────────────────────────────
 
-_client = OpenAI(
-    api_key=XAI_API_KEY,
-    base_url=XAI_BASE_URL,
-)
+_client = Groq(api_key=GROQ_API_KEY)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,8 +45,8 @@ You will receive a JSON object containing:
 
 Your job is to generate exactly 5 insight strings in a JSON array.
 Each insight must:
-1. Be 1–2 sentences, specific, and data-driven (reference actual numbers)
-2. Explain cause → effect using EV physics or electrochemistry reasoning
+1. Be 1-2 sentences, specific, and data-driven (reference actual numbers)
+2. Explain cause and effect using EV physics or electrochemistry reasoning
 3. Include a concrete actionable recommendation where relevant
 4. Be written for a technically literate audience (engineering student level)
 
@@ -82,9 +81,9 @@ def generate_insights(
     list[str] — 5 insight strings
     """
     try:
-        insights = _call_grok(simulation_result, metrics)
+        insights = _call_groq(simulation_result, metrics)
     except Exception as exc:
-        print(f"[insight_engine] Grok call failed: {exc}. Using rule-based fallback.")
+        print(f"[insight_engine] Groq call failed: {exc}. Using rule-based fallback.")
         insights = _rule_based_insights(simulation_result, metrics)
 
     # Sanitise — ensure we always return exactly 5 strings
@@ -95,13 +94,13 @@ def generate_insights(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Grok call
+# Groq call
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_grok(simulation_result: dict, metrics: dict) -> list[str]:
-    """Build the payload and call Grok."""
+def _call_groq(simulation_result: dict, metrics: dict) -> list[str]:
+    """Build the payload and call Groq LLaMA."""
 
-    # Build a compact context object — avoid sending full telemetry (too large)
+    # Compact context — avoid sending full telemetry (too large)
     context = {
         "scenario_label": simulation_result["scenario_label"],
         "params":         simulation_result["params"],
@@ -120,7 +119,7 @@ def _call_grok(simulation_result: dict, metrics: dict) -> list[str]:
     }
 
     response = _client.chat.completions.create(
-        model=GROK_MODEL,
+        model=GROQ_MODEL,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": json.dumps(context, indent=2)},
@@ -132,7 +131,6 @@ def _call_grok(simulation_result: dict, metrics: dict) -> list[str]:
     raw = response.choices[0].message.content.strip()
 
     # Strip markdown fences if model wraps anyway
-    import re
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$",       "", raw)
 
@@ -148,7 +146,7 @@ def _rule_based_insights(
     metrics: dict,
 ) -> list[str]:
     """
-    Generate deterministic insights from metric values when Grok
+    Generate deterministic insights from metric values when Groq
     is unavailable. Covers all major scenario conditions.
     """
     summary = simulation_result["summary"]
@@ -182,13 +180,13 @@ def _rule_based_insights(
             f"aggressive discharge under {params['temperature_c']}°C ambient conditions "
             f"compounded with {params['traffic'].replace('_',' ')} traffic caused "
             f"energy consumption well above baseline. Pre-conditioning the cabin and "
-            f"battery before departure could recover 8–12% efficiency."
+            f"battery before departure could recover 8-12% efficiency."
         )
 
     # ── Insight 2 — Thermal ───────────────────────────────────────────────────
-    max_t   = summary["max_temp_c"]
-    avg_t   = summary["avg_temp_c"]
-    t_risk  = m["thermal_risk_pct"]
+    max_t  = summary["max_temp_c"]
+    avg_t  = summary["avg_temp_c"]
+    t_risk = m["thermal_risk_pct"]
 
     if t_risk >= 65:
         insights.append(
@@ -202,7 +200,7 @@ def _rule_based_insights(
             f"Moderate thermal risk ({t_risk:.1f}%) observed — average temperature of "
             f"{avg_t:.1f}°C remained manageable but peak of {max_t:.1f}°C during "
             f"charging cycles suggests the thermal management system was working hard. "
-            f"Increasing inter-charge intervals by 15–20 minutes would reduce peak heat."
+            f"Increasing inter-charge intervals by 15-20 minutes would reduce peak heat."
         )
     else:
         insights.append(
@@ -212,8 +210,8 @@ def _rule_based_insights(
         )
 
     # ── Insight 3 — Battery stress ────────────────────────────────────────────
-    bsi     = m["battery_stress_index"]
-    swing   = summary["battery_swing_pct"]
+    bsi   = m["battery_stress_index"]
+    swing = summary["battery_swing_pct"]
 
     if bsi >= 70:
         insights.append(
@@ -222,7 +220,7 @@ def _rule_based_insights(
             f"{params['charging_mode'].replace('_',' ')} charging "
             f"and {params['driving_style']} acceleration patterns place significant "
             f"mechanical and electrochemical strain on the cell stack. "
-            f"Limiting SoC swing to 20–80% would extend pack life by an estimated 30–40%."
+            f"Limiting SoC swing to 20-80% would extend pack life by an estimated 30-40%."
         )
     elif bsi >= 45:
         insights.append(
@@ -250,7 +248,7 @@ def _rule_based_insights(
             f"{v_std:.1f}V — frequent power spikes from {params['driving_style']} "
             f"acceleration on {params['terrain']} terrain caused inconsistent current "
             f"draw, stressing the battery management system. Smoother throttle inputs "
-            f"could reduce voltage fluctuation by an estimated 20–25%."
+            f"could reduce voltage fluctuation by an estimated 20-25%."
         )
     else:
         insights.append(
