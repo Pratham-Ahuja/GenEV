@@ -505,12 +505,13 @@ def _render_history_tab():
                     """, unsafe_allow_html=True)
 
             with col_actions:
-                if st.button("📂 Load", key=f"load_{run['id']}",
-                             use_container_width=True):
+                if st.button("📂 Load", key=f"load_{run['id']}",use_container_width=True):
                     full = get_run_by_id(run["id"])
                     if full:
+                        from simulation_engine.simulator import _enrich_telemetry
+                        enriched_telemetry = _enrich_telemetry(full["telemetry"], full["params"])
                         reconstructed = {
-                            "telemetry":      full["telemetry"],
+                            "telemetry":      enriched_telemetry,
                             "summary":        _recompute_summary(full["telemetry"], full["params"]),
                             "params":         full["params"],
                             "scenario_label": _build_label(full["params"]),
@@ -533,8 +534,10 @@ def _render_history_tab():
 
 
 def _recompute_summary(telemetry: list, params: dict) -> dict:
-    from simulation_engine.simulator import _compute_summary
-    return _compute_summary(telemetry, params)
+    from simulation_engine.simulator import _compute_summary, _enrich_telemetry
+    # Re-enrich telemetry loaded from DB — it's missing derived fields
+    enriched = _enrich_telemetry(telemetry, params)
+    return _compute_summary(enriched, params)
 
 
 def _build_label(params: dict) -> str:

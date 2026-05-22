@@ -170,6 +170,10 @@ def _enrich_telemetry(telemetry: List[dict], params: dict) -> List[dict]:
 def _compute_summary(telemetry: List[dict], params: dict) -> dict:
     """Aggregate the enriched telemetry into scalar summary statistics."""
 
+    # ── Re-enrich if loaded from DB (missing derived fields) ─────────────────
+    if telemetry and "power_kw" not in telemetry[0]:
+        telemetry = _enrich_telemetry(telemetry, params)
+
     speeds         = np.array([r["speed_kmh"]      for r in telemetry])
     temps          = np.array([r["temp_c"]          for r in telemetry])
     batteries      = np.array([r["battery_pct"]     for r in telemetry])
@@ -187,7 +191,6 @@ def _compute_summary(telemetry: List[dict], params: dict) -> dict:
     total_charge   = float(np.sum(charge_rates) * dt_hours)
 
     charging_steps = sum(1 for r in telemetry if r["is_charging"])
-    # Count charging events (transitions into charging state)
     charging_events = sum(
         1 for i in range(1, len(telemetry))
         if telemetry[i]["is_charging"] and not telemetry[i - 1]["is_charging"]
@@ -199,14 +202,10 @@ def _compute_summary(telemetry: List[dict], params: dict) -> dict:
     energy_per_km = (total_energy / total_distance) if total_distance > 0 else 0.0
     regen_recovery_pct = (total_regen / total_energy * 100) if total_energy > 0 else 0.0
 
-    # Voltage and thermal consistency (lower std = more stable)
     voltage_std = float(np.std(voltages))
     thermal_std = float(np.std(temps))
 
-    # Cumulative degradation signal
     total_degradation = float(np.sum(degradations))
-
-    # Battery swing — how much SoC changed overall
     battery_swing = float(batteries[0] - batteries[-1])
 
     return {
