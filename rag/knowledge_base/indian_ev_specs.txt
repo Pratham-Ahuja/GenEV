@@ -1,0 +1,332 @@
+# Indian Electric Vehicle Specifications — GenEV Knowledge Base
+# Last Updated: 2025
+# Source: Manufacturer specifications, ARAI certified data
+
+================================================================
+TATA NEXON EV
+================================================================
+Model: Tata Nexon EV
+Manufacturer: Tata Motors
+Category: Compact SUV
+Launch Year: 2020 (updated 2023)
+
+VARIANTS:
+1. Nexon EV Medium Range (MR)
+   - Battery: 30 kWh LFP (Lithium Iron Phosphate)
+   - ARAI Range: 312 km
+   - Real World Range: 200-230 km
+   - Motor Power: 129 PS
+   - Torque: 245 Nm
+   - Top Speed: 120 km/h
+   - 0-100 km/h: 9.9 seconds
+   - AC Charging (7.2 kW): 0-100% in 4.5 hours
+   - DC Fast Charging (50 kW): 0-80% in 56 minutes
+   - Price: Rs 14.49 lakh onwards
+
+2. Nexon EV Long Range (LR)
+   - Battery: 40.5 kWh LFP
+   - ARAI Range: 465 km
+   - Real World Range: 300-340 km
+   - Motor Power: 143 PS
+   - Torque: 215 Nm
+   - Top Speed: 150 km/h
+   - 0-100 km/h: 8.9 seconds
+   - AC Charging (7.2 kW): 0-100% in 6.5 hours
+   - DC Fast Charging (50 kW): 0-80% in 60 minutes
+   - Price: Rs 17.49 lakh onwards
+
+FEATURES:
+- IP67 rated battery pack
+- Thermal management system
+- Regenerative braking with 3 levels
+- Connected car technology (ZConnect)
+- 8-year/160,000 km battery warranty
+- Boot space: 350 litres
+
+CHARGING COMPATIBILITY:
+- Type 2 AC charging
+- CCS2 DC fast charging
+- Compatible with Tata Power EZ charge network
+
+THERMAL PERFORMANCE:
+- Optimal operating temperature: 15-35°C
+- Performance degrades below 0°C (up to 20% range loss)
+- Performance degrades above 40°C (up to 15% range loss)
+- Active liquid cooling system for battery
+
+OWNERSHIP COST (Delhi):
+- Per km cost: Rs 1.2-1.8 (home charging at Rs 6/kWh)
+- Annual maintenance: Rs 4,000-6,000
+- Insurance: Rs 25,000-35,000/year
+
+================================================================
+TATA TIAGO EV
+================================================================
+Model: Tata Tiago EV
+Manufacturer: Tata Motors
+Category: Hatchback
+Launch Year: 2022
+
+VARIANTS:
+1. Tiago EV Short Range
+   - Battery: 19.2 kWh LFP
+   - ARAI Range: 250 km
+   - Real World Range: 150-180 km
+   - Motor Power: 60 PS
+   - Torque: 110 Nm
+   - Top Speed: 120 km/h
+   - AC Charging (3.3 kW): 0-100% in 8.7 hours
+   - DC Fast Charging (none): Not available
+   - Price: Rs 7.99 lakh onwards
+
+2. Tiago EV Long Range
+   - Battery: 24 kWh LFP
+   - ARAI Range: 315 km
+   - Real World Range: 200-240 km
+   - Motor Power: 75 PS
+   - Torque: 114 Nm
+   - Top Speed: 150 km/h
+   - AC Charging (7.2 kW): 0-100% in 3.6 hours
+   - DC Fast Charging (none): Not available
+   - Price: Rs 9.99 lakh onwards
+
+BEST FOR:
+- City commuting under 80 km/day
+- Budget-conscious buyers
+- First-time EV owners
+- Apartment dwellers with charging access
+
+================================================================
+TATA PUNCH EV
+================================================================
+Model: Tata Punch EV
+Manufacturer: Tata Motors
+Category: Micro SUV
+Launch Year: 2024
+
+VARIANTS:
+1. Punch EV Standard Range
+   - Battery: 25 kWh LFP
+   - ARAI Range: 315 km
+   - Real World Range: 200-230 km
+   - Motor Power: 82 PS
+   - Torque: 114 Nm
+   - AC Charging (3.3 kW): Full charge in 9.4 hours
+   - DC Fast Charging (none): Not available
+   - Price: Rs 9.99 lakh onwards
+
+2. Punch EV Long Range
+   - Battery: 35 kWh LFP
+   - ARAI Range: 421 km
+   - Real World Range: 280-320 km
+   - Motor Power: 122 PS
+   - Torque: 190 Nm
+   - AC Charging (7.2 kW): Full charge in 5.6 hours
+   - DC Fast Charging (50 kW): 0-80% in 56 minutes
+   - Price: Rs 13.99 lakh onwards
+
+================================================================
+ATHER 450X GEN 3
+================================================================
+Model: Ather 450X Gen 3
+Manufacturer: Ather Energy
+Category: Electric Scooter
+Launch Year: 2023
+
+SPECIFICATIONS:
+- Battery: 3.7 kWh Li-ion
+- ARAI Range: 150 km (Eco mode)
+- Real World Range: 85-100 km
+- Motor Power: 6 kW (peak 8.5 kW)
+- Top Speed: 90 km/h
+- 0-40 km/h: 3.9 seconds
+- Charging (Ather Dot): 0-80% in 3.8 hours
+- Fast Charging (Ather Fast Charger): 0-80% in 1.1 hours
+- Price: Rs 1.30 lakh onwards
+
+RIDING MODES:
+- Eco: Maximum range, limited speed
+- Ride: Balanced performance
+- Sport: Maximum performance
+- Warp: Highest acceleration (Pro variant)
+
+THERMAL MANAGEMENT:
+- Air-cooled battery
+- Optimal temperature: 15-40°C
+- Auto power reduction above 45°C
+
+ATHER GRID (Fast Charging Network):
+- 1,800+ charging points across India
+- Located at malls, cafes, offices
+- Free charging for first 3 months
+
+================================================================
+OLA S1 PRO GEN 2
+================================================================
+Model: Ola S1 Pro Gen 2
+Manufacturer: Ola Electric
+Category: Electric Scooter
+Launch Year: 2023
+
+SPECIFICATIONS:
+- Battery: 4 kWh Li-NMC
+- ARAI Range: 195 km
+- Real World Range: 100-130 km
+- Motor Power: 8.5 kW peak
+- Top Speed: 120 km/h (Sport mode)
+- 0-40 km/h: 3 seconds
+- Charging (Standard): 0-100% in 6.5 hours
+- Fast Charging: 0-50% in 30 minutes
+- Price: Rs 1.29 lakh onwards
+
+RIDING MODES:
+- Normal: Balanced
+- Sports: Performance
+- Hyper: Maximum performance
+
+KNOWN ISSUES:
+- Software updates required frequently
+- Service network still expanding
+- Best in cities with Ola service centers
+
+================================================================
+MG WINDSOR EV
+================================================================
+Model: MG Windsor EV
+Manufacturer: MG Motor India
+Category: Crossover
+Launch Year: 2024
+
+SPECIFICATIONS:
+- Battery: 38 kWh NMC (leased via BaaS model)
+- ARAI Range: 331 km
+- Real World Range: 220-260 km
+- Motor Power: 136 PS
+- Torque: 200 Nm
+- Top Speed: 160 km/h
+- 0-100 km/h: 8.5 seconds
+- AC Charging (6.6 kW): 0-100% in 6.5 hours
+- DC Fast Charging (40 kW): 0-80% in 60 minutes
+- Base Price: Rs 13.5 lakh (BaaS model - battery on lease)
+- Full ownership: Rs 17.5 lakh
+
+UNIQUE FEATURE — Battery as a Service (BaaS):
+- Pay Rs 3.5/km for battery usage
+- No battery ownership cost
+- Battery replacement managed by MG
+- Best for: High mileage users
+
+================================================================
+MAHINDRA XEV 9E
+================================================================
+Model: Mahindra XEV 9e
+Manufacturer: Mahindra Electric
+Category: Electric SUV (Coupe)
+Launch Year: 2025
+
+SPECIFICATIONS:
+- Battery: 79 kWh (standard) / 59 kWh (base)
+- ARAI Range: 656 km (79 kWh)
+- Real World Range: 450-500 km
+- Motor Power: 282 PS (AWD) / 231 PS (RWD)
+- Torque: 380 Nm
+- Top Speed: 200 km/h
+- 0-100 km/h: 6.7 seconds (AWD)
+- AC Charging (11 kW): 0-100% in 8 hours
+- DC Fast Charging (175 kW): 0-80% in 20 minutes
+- Price: Rs 21.9 lakh onwards
+
+TECHNOLOGY:
+- 800V architecture
+- Vehicle to Load (V2L) support
+- ADAS Level 2+ features
+- 79 kWh CATL battery
+
+================================================================
+BYD ATTO 3
+================================================================
+Model: BYD Atto 3
+Manufacturer: BYD India
+Category: Compact SUV
+Launch Year: 2023
+
+SPECIFICATIONS:
+- Battery: 60.48 kWh Blade Battery (LFP)
+- ARAI Range: 521 km
+- Real World Range: 350-400 km
+- Motor Power: 204 PS
+- Torque: 310 Nm
+- Top Speed: 160 km/h
+- 0-100 km/h: 7.3 seconds
+- AC Charging (7 kW): 0-100% in 9 hours
+- DC Fast Charging (60 kW): 0-80% in 50 minutes
+- Price: Rs 24.99 lakh onwards
+
+BLADE BATTERY ADVANTAGES:
+- No thermal runaway risk
+- Higher energy density than conventional LFP
+- Passes nail penetration test safely
+- 8-year/160,000 km warranty
+
+================================================================
+EV COMPARISON TABLE — INDIA 2025
+================================================================
+
+| Model           | Range  | Price        | Best For              |
+|-----------------|--------|--------------|-----------------------|
+| Tiago EV        | 250 km | Rs 8-10 lakh | Budget city commute   |
+| Punch EV        | 421 km | Rs 10-14 lakh| Family micro SUV      |
+| Nexon EV        | 465 km | Rs 14-18 lakh| Family SUV            |
+| MG Windsor      | 331 km | Rs 13-18 lakh| Feature-rich crossover|
+| Ather 450X      | 150 km | Rs 1.3 lakh  | Urban scooter         |
+| Ola S1 Pro      | 195 km | Rs 1.3 lakh  | Performance scooter   |
+| BYD Atto 3      | 521 km | Rs 25 lakh   | Premium SUV           |
+| Mahindra XEV 9e | 656 km | Rs 22 lakh   | Flagship performance  |
+
+================================================================
+EV SELECTION GUIDE — INDIA
+================================================================
+
+FOR DAILY COMMUTE UNDER 50 KM:
+- Best: Tata Tiago EV (budget) or Ather 450X (scooter)
+- Why: Sufficient range, low cost, easy charging
+
+FOR DAILY COMMUTE 50-100 KM:
+- Best: Tata Nexon EV MR or Punch EV
+- Why: Comfortable range buffer, fast charging available
+
+FOR INTERCITY TRAVEL:
+- Best: Nexon EV LR, BYD Atto 3, Mahindra XEV 9e
+- Why: High range, DC fast charging support
+
+FOR APARTMENT DWELLERS (No Home Charging):
+- Best: Ather 450X (portable charger), MG Windsor (BaaS)
+- Why: Public charging network, flexible battery options
+
+FOR FAMILIES:
+- Best: Tata Nexon EV, MG Windsor, BYD Atto 3
+- Why: Space, safety, range comfort
+
+FOR PERFORMANCE ENTHUSIASTS:
+- Best: Mahindra XEV 9e, Ola S1 Pro
+- Why: High power, fast acceleration
+
+================================================================
+GOVERNMENT SUBSIDIES — INDIA 2025
+================================================================
+
+FAME II SCHEME:
+- Central subsidy: Rs 10,000 per kWh (capped)
+- Maximum subsidy: Rs 1.5 lakh for 4-wheelers
+- Maximum subsidy: Rs 15,000 for 2-wheelers
+- Valid on: ARAI certified EVs only
+
+STATE SUBSIDIES (Examples):
+- Delhi: Rs 1.5 lakh additional subsidy
+- Maharashtra: Rs 1 lakh subsidy
+- Gujarat: Rs 1.5 lakh subsidy
+- Tamil Nadu: Road tax exemption
+
+TOTAL SAVINGS POSSIBLE:
+- 4-wheeler: Up to Rs 3 lakh off road price
+- 2-wheeler: Up to Rs 30,000 off road price
