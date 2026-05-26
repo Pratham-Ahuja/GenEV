@@ -49,6 +49,20 @@ def set_auth_token(access_token: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Profile cache invalidation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _invalidate_profile_cache() -> None:
+    """Clear cached profile from session state so next read is fresh."""
+    try:
+        import streamlit as st
+        if "genev_profile" in st.session_state:
+            del st.session_state["genev_profile"]
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Profile operations
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -63,25 +77,26 @@ def create_profile(
 ) -> dict:
     """Create a new user profile after signup."""
     client = get_client()
+    today  = str(date.today())
     data = {
-        "id":                 user_id,
-        "name":               name,
-        "email":              email,
-        "city":               city,
-        "daily_commute_km":   daily_commute_km,
-        "has_home_charging":  has_home_charging,
-        "driving_style":      driving_style,
-        "subscription_plan":  "free",
+        "id":                     user_id,
+        "name":                   name,
+        "email":                  email,
+        "city":                   city,
+        "daily_commute_km":       daily_commute_km,
+        "has_home_charging":      has_home_charging,
+        "driving_style":          driving_style,
+        "subscription_plan":      "free",
         "simulations_used_today": 0,
         "questions_used_today":   0,
-        "usage_reset_date":   str(date.today()),
+        "usage_reset_date":       today,
     }
     response = client.table("profiles").insert(data).execute()
     return response.data[0] if response.data else {}
 
 
 def get_profile(user_id: str) -> Optional[dict]:
-    """Fetch a user's profile by user_id."""
+    """Fetch a user's profile directly from Supabase (never cached)."""
     client = get_client()
     response = (
         client.table("profiles")
@@ -101,6 +116,7 @@ def update_profile(user_id: str, updates: dict) -> dict:
         .eq("id", user_id)
         .execute()
     )
+    _invalidate_profile_cache()
     return response.data[0] if response.data else {}
 
 
@@ -111,17 +127,27 @@ def update_profile(user_id: str, updates: dict) -> dict:
 def _reset_usage_if_needed(profile: dict) -> dict:
     """
     Reset daily usage counters if the reset date is before today.
-    Called before every usage check.
+    Also fixes profiles that have NULL or missing reset dates.
     """
-    today = str(date.today())
-    if profile.get("usage_reset_date") != today:
+    today      = str(date.today())
+    reset_date = profile.get("usage_reset_date")
+
+    # Normalise — date objects vs strings
+    if reset_date and not isinstance(reset_date, str):
+        reset_date = str(reset_date)
+
+    if not reset_date or reset_date != today:
         updates = {
             "simulations_used_today": 0,
             "questions_used_today":   0,
             "usage_reset_date":       today,
         }
-        profile = update_profile(profile["id"], updates)
-        profile.update(updates)
+        try:
+            update_profile(profile["id"], updates)
+        except Exception as e:
+            print(f"[supabase_client] Failed to reset usage: {e}")
+        profile = {**profile, **updates}
+
     return profile
 
 
@@ -136,26 +162,35 @@ def check_simulation_limit(user_id: str) -> tuple[bool, int, int]:
     from config import FREE_SIMULATIONS_PER_DAY, PREMIUM_SIMULATIONS_PER_DAY
 
     profile = get_profile(user_id)
+
     if not profile:
-        return False, 0, 0
+        return True, 0, FREE_SIMULATIONS_PER_DAY
 
     profile = _reset_usage_if_needed(profile)
 
     plan  = profile.get("subscription_plan", "free")
-    limit = FREE_SIMULATIONS_PER_DAY if plan == "free" else PREMIUM_SIMULATIONS_PER_DAY
-    used  = profile.get("simulations_used_today", 0)
+    limit = (
+        PREMIUM_SIMULATIONS_PER_DAY
+        if plan == "premium"
+        else FREE_SIMULATIONS_PER_DAY
+    )
+    used = profile.get("simulations_used_today", 0) or 0
 
     return used < limit, used, limit
 
 
 def increment_simulation_count(user_id: str) -> None:
-    """Increment the user's simulation count for today."""
+    """
+    Increment simulation count for today.
+    Always fetches fresh from DB — never uses cache.
+    """
     profile = get_profile(user_id)
     if not profile:
         return
     profile = _reset_usage_if_needed(profile)
-    used = profile.get("simulations_used_today", 0)
+    used    = profile.get("simulations_used_today", 0) or 0
     update_profile(user_id, {"simulations_used_today": used + 1})
+    _invalidate_profile_cache()
 
 
 def check_question_limit(user_id: str) -> tuple[bool, int, int]:
@@ -169,26 +204,35 @@ def check_question_limit(user_id: str) -> tuple[bool, int, int]:
     from config import FREE_QUESTIONS_PER_DAY, PREMIUM_QUESTIONS_PER_DAY
 
     profile = get_profile(user_id)
+
     if not profile:
-        return False, 0, 0
+        return True, 0, FREE_QUESTIONS_PER_DAY
 
     profile = _reset_usage_if_needed(profile)
 
     plan  = profile.get("subscription_plan", "free")
-    limit = FREE_QUESTIONS_PER_DAY if plan == "free" else PREMIUM_QUESTIONS_PER_DAY
-    used  = profile.get("questions_used_today", 0)
+    limit = (
+        PREMIUM_QUESTIONS_PER_DAY
+        if plan == "premium"
+        else FREE_QUESTIONS_PER_DAY
+    )
+    used = profile.get("questions_used_today", 0) or 0
 
     return used < limit, used, limit
 
 
 def increment_question_count(user_id: str) -> None:
-    """Increment the user's question count for today."""
+    """
+    Increment question count for today.
+    Always fetches fresh from DB — never uses cache.
+    """
     profile = get_profile(user_id)
     if not profile:
         return
     profile = _reset_usage_if_needed(profile)
-    used = profile.get("questions_used_today", 0)
+    used    = profile.get("questions_used_today", 0) or 0
     update_profile(user_id, {"questions_used_today": used + 1})
+    _invalidate_profile_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -210,7 +254,6 @@ def save_simulation_run(
     """
     client = get_client()
 
-    # Sanitise telemetry — convert bool values for JSON
     clean_telemetry = []
     for row in telemetry:
         clean_row = dict(row)
@@ -232,9 +275,7 @@ def save_simulation_run(
 
 
 def get_all_simulation_runs(user_id: str, limit: int = 50) -> list[dict]:
-    """
-    Fetch all simulation runs for a user (no telemetry — summary only).
-    """
+    """Fetch all simulation runs for a user (no telemetry — summary only)."""
     client = get_client()
     response = (
         client.table("simulation_runs_v2")
@@ -262,7 +303,6 @@ def get_simulation_run_by_id(run_id: str, user_id: str) -> Optional[dict]:
 
     run = response.data[0]
 
-    # Convert is_charging back to bool in telemetry
     telemetry = run.get("telemetry", [])
     for row in telemetry:
         row["is_charging"] = bool(row.get("is_charging", False))
@@ -306,11 +346,11 @@ def save_chat_message(
     """Save a Q&A pair to chat history."""
     client = get_client()
     data = {
-        "user_id":             user_id,
-        "question":            question,
-        "answer":              answer,
-        "sources":             sources,
-        "simulation_context":  simulation_context or {},
+        "user_id":            user_id,
+        "question":           question,
+        "answer":             answer,
+        "sources":            sources,
+        "simulation_context": simulation_context or {},
     }
     client.table("chat_history").insert(data).execute()
 
@@ -326,7 +366,6 @@ def get_chat_history(user_id: str, limit: int = 20) -> list[dict]:
         .limit(limit)
         .execute()
     )
-    # Return in chronological order
     return list(reversed(response.data or []))
 
 
