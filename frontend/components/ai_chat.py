@@ -14,14 +14,12 @@ Features
 - Clear chat functionality
 """
 
+import re
 import streamlit as st
-from datetime import datetime
 
 from auth.auth_handler import (
     get_user_id,
-    get_user_name,
     is_premium,
-    get_profile_cached,
 )
 from rag.rag_engine import get_rag_engine
 from database.supabase_client import (
@@ -44,7 +42,10 @@ _SOURCE_LABELS = {
 
 
 def _format_source(source: str) -> str:
-    return _SOURCE_LABELS.get(source, f"📚 {source.replace('_', ' ').title()}")
+    return _SOURCE_LABELS.get(
+        source,
+        f"📚 {source.replace('_', ' ').title()}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +79,7 @@ def render_ai_chat(simulation_context: dict = None) -> None:
 
     # ── Simulation context banner ─────────────────────────────────────────────
     if simulation_context:
-        label = simulation_context.get("scenario_label", "Recent simulation")
+        label   = simulation_context.get("scenario_label", "Recent simulation")
         overall = simulation_context.get("metrics", {}).get("overall_score", 0)
         st.markdown(
             f'<div style="background:rgba(29,158,117,0.08);border:1px solid '
@@ -126,15 +127,13 @@ def _render_question_limit_bar(user_id: str) -> None:
 
     if premium:
         label_color = "#1D9E75"
-        bar_color   = "#1D9E75"
     elif used >= limit:
         label_color = "#DC2626"
-        bar_color   = "#DC2626"
     else:
         label_color = "#D97706"
-        bar_color   = "#D97706"
 
     pct = min(100, int((used / limit) * 100)) if limit > 0 else 100
+    bar_color = label_color
 
     st.markdown(
         f'<div style="margin-bottom:8px;">'
@@ -174,22 +173,10 @@ def _render_question_limit_bar(user_id: str) -> None:
 def _render_chat_history(user_id: str) -> None:
     """Render chat message history."""
 
-    # Load from Supabase + merge with session messages
+    # Load from Supabase on first render
     if "chat_messages" not in st.session_state:
         try:
             history = get_chat_history(user_id, limit=20)
-            st.session_state.chat_messages = [
-                {
-                    "role":    "assistant" if i % 2 == 1 else "user",
-                    "content": msg.get("question", "") if True else msg.get("answer", ""),
-                    "sources": [],
-                }
-                for msg in history
-                for content_type in ["question", "answer"]
-                for msg_content in [msg.get(content_type, "")]
-                if msg_content
-            ]
-            # Rebuild properly
             st.session_state.chat_messages = []
             for msg in history:
                 if msg.get("question"):
@@ -261,20 +248,21 @@ def _render_message(msg: dict) -> None:
 
     if role == "user":
         st.markdown(
-            f'<div style="display:flex;justify-content:flex-end;margin-bottom:8px;">'
-            f'<div style="background:#1D9E75;color:white;border-radius:16px 16px 4px 16px;'
+            f'<div style="display:flex;justify-content:flex-end;'
+            f'margin-bottom:8px;">'
+            f'<div style="background:#1D9E75;color:white;'
+            f'border-radius:16px 16px 4px 16px;'
             f'padding:10px 16px;max-width:80%;font-size:13px;line-height:1.5;">'
             f'{content}'
             f'</div></div>',
             unsafe_allow_html=True,
         )
     else:
-        # Format content — convert **bold** to HTML
-        formatted = content.replace("**", "<b>", 1)
-        import re
+        # Format markdown bold to HTML
         formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', content)
         formatted = formatted.replace("\n", "<br>")
 
+        # Build sources badges
         sources_html = ""
         if sources:
             source_badges = "".join([
@@ -291,7 +279,8 @@ def _render_message(msg: dict) -> None:
             )
 
         st.markdown(
-            f'<div style="display:flex;justify-content:flex-start;margin-bottom:8px;">'
+            f'<div style="display:flex;justify-content:flex-start;'
+            f'margin-bottom:8px;">'
             f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
             f'border-radius:16px 16px 16px 4px;padding:10px 16px;'
             f'max-width:85%;font-size:13px;line-height:1.5;color:#1E293B;">'
@@ -356,10 +345,10 @@ def _handle_question(
 ) -> None:
     """Process a question through the RAG engine."""
 
-    # Add user message to session state immediately
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
 
+    # Add user message immediately
     st.session_state.chat_messages.append({
         "role":    "user",
         "content": question,
@@ -377,7 +366,6 @@ def _handle_question(
 
     answer  = result.get("answer", "Sorry, I could not generate a response.")
     sources = result.get("sources", [])
-    allowed = result.get("allowed", True)
 
     # Add assistant message
     st.session_state.chat_messages.append({
@@ -386,7 +374,7 @@ def _handle_question(
         "sources": sources,
     })
 
-    # Clear input
+    # Clear input field
     if "chat_input" in st.session_state:
         st.session_state.chat_input = ""
 
@@ -408,36 +396,40 @@ def _render_suggested_questions(simulation_context: dict = None) -> None:
     if simulation_context:
         params  = simulation_context.get("params", {})
         metrics = simulation_context.get("metrics", {})
-
         thermal = metrics.get("thermal_risk_pct", 0)
-        stress  = metrics.get("battery_stress_index", 0)
-        terrain = params.get("terrain", "urban")
         style   = params.get("driving_style", "moderate")
+        terrain = params.get("terrain", "urban")
 
         suggestions = [
-            f"Why was thermal risk {'high' if thermal > 50 else 'low'} in my simulation?",
+            f"Why was thermal risk {'high' if thermal > 50 else 'low'} "
+            f"in my simulation?",
             f"How does {style} driving affect battery life?",
-            f"What EV would you recommend for {terrain} terrain in India?",
+            f"What EV is best for {terrain} terrain in India?",
             "How can I improve my efficiency score?",
             "What is the best charging strategy for my scenario?",
         ]
     else:
         suggestions = [
-            "What is the best EV for daily commute in Delhi?",
-            "How does fast charging affect battery degradation?",
-            "What is the real-world range of Tata Nexon EV?",
-            "How much does home charging cost per km in India?",
-            "What government subsidies are available for EVs in India?",
+            "Best EV for daily commute in Delhi?",
+            "How does fast charging affect battery life?",
+            "Real-world range of Tata Nexon EV?",
+            "Home charging cost per km in India?",
+            "What EV subsidies are available in India?",
         ]
 
-    cols = st.columns(min(len(suggestions), 3))
-    for i, (col, suggestion) in enumerate(zip(cols, suggestions[:3])):
+    cols = st.columns(3)
+    for idx, (col, suggestion) in enumerate(zip(cols, suggestions[:3])):
         with col:
+            label = (
+                suggestion[:45] + "..."
+                if len(suggestion) > 45
+                else suggestion
+            )
             if st.button(
-                suggestion[:45] + "..." if len(suggestion) > 45 else suggestion,
-                key=f"suggest_{i}",
+                label,
+                key=f"suggest_{idx}",
                 use_container_width=True,
                 help=suggestion,
             ):
-                st.session_state.chat_input = suggestion
+                st.session_state["chat_input"] = suggestion
                 st.rerun()

@@ -1,12 +1,14 @@
 """
-frontend/app.py — Main GenEV Streamlit application.
+frontend/app.py — Main GenEV 2.0 Streamlit application.
 
 Tabs
 ----
 1. 🧪 Simulator   — prompt input, run simulation, view results
-2. 📜 History     — browse and reload past runs
-3. 🔀 Comparison  — side-by-side multi-run analysis
-4. ℹ️  About       — project info and tech stack
+2. 🤖 AI Chat     — RAG-powered conversational AI
+3. 📜 History     — personal simulation history
+4. 🔀 Comparison  — side-by-side multi-run analysis
+5. 💎 Premium     — subscription and pricing
+6. ℹ️  About       — platform info, feedback, creator
 
 Run with:
     streamlit run frontend/app.py
@@ -16,18 +18,36 @@ import time
 import sys
 import os
 
-# ── Path fix so imports work from any working directory ───────────────────────
+# ── Path fix ──────────────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import streamlit as st
 
 from config import APP_TITLE, APP_VERSION
-from database.db import init_db, get_all_runs, get_run_by_id, delete_run, save_run
+from auth.auth_handler import (
+    is_logged_in,
+    restore_session,
+    get_user_id,
+    get_user_name,
+    get_profile_cached,
+    is_premium,
+    sign_out,
+)
+from auth.auth_ui import render_auth_page, render_user_sidebar
+from database.supabase_client import (
+    save_simulation_run,
+    get_all_simulation_runs,
+    get_simulation_run_by_id,
+    get_runs_for_comparison,
+    delete_simulation_run,
+    check_simulation_limit,
+    increment_simulation_count,
+)
 from simulation_engine.scenario_parser import parse_scenario
-from simulation_engine.simulator import run_simulation
+from simulation_engine.simulator import run_simulation, _compute_summary, _build_scenario_label, _enrich_telemetry
 from simulation_engine.metrics import compute_metrics
 from ai_insights.insight_engine import generate_insights
-
+from export.pdf_exporter import generate_pdf
 from frontend.components.charts import (
     battery_chart,
     thermal_chart,
@@ -46,6 +66,9 @@ from frontend.components.metrics_panel import (
     render_ai_gain_banner,
 )
 from frontend.components.comparison import render_comparison_panel
+from frontend.components.ai_chat import render_ai_chat
+from frontend.components.subscription import render_subscription_page
+from frontend.components.about import render_about_page
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +76,7 @@ from frontend.components.comparison import render_comparison_panel
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title=f"{APP_TITLE} — EV Scenario Simulator",
+    page_title=f"{APP_TITLE} — EV Intelligence Platform",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -61,12 +84,12 @@ st.set_page_config(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Global CSS — light theme compatible, no dark overrides
+# Global CSS
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
-    /* ── Buttons ── */
+    /* Buttons */
     .stButton > button {
         background: linear-gradient(135deg, #1D9E75, #15795A) !important;
         color: white !important;
@@ -79,7 +102,7 @@ st.markdown("""
     }
     .stButton > button:hover { opacity: 0.88 !important; }
 
-    /* ── Tabs ── */
+    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         border-radius: 10px;
@@ -96,7 +119,7 @@ st.markdown("""
         font-weight: 600;
     }
 
-    /* ── Text area ── */
+    /* Text area */
     .stTextArea textarea {
         border: 1.5px solid #CBD5E1 !important;
         border-radius: 10px !important;
@@ -107,42 +130,63 @@ st.markdown("""
         box-shadow: 0 0 0 2px rgba(29,158,117,0.20) !important;
     }
 
-    /* ── Multiselect tags ── */
+    /* Multiselect */
     .stMultiSelect [data-baseweb="tag"] {
         background: rgba(29,158,117,0.20) !important;
         color: #1D9E75 !important;
     }
 
-    /* ── Spinner ── */
+    /* Spinner */
     .stSpinner > div { border-top-color: #1D9E75 !important; }
 
-    /* ── Alert boxes ── */
+    /* Alerts */
     .stAlert { border-radius: 10px !important; }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        border-right: 1px solid #E2E8F0 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Initialise DB on first load
-# ─────────────────────────────────────────────────────────────────────────────
-
-@st.cache_resource
-def _init():
-    init_db()
-    return True
-
-_init()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state defaults
 # ─────────────────────────────────────────────────────────────────────────────
 
-if "last_result"    not in st.session_state: st.session_state.last_result    = None
-if "last_metrics"   not in st.session_state: st.session_state.last_metrics   = None
-if "last_run_id"    not in st.session_state: st.session_state.last_run_id    = None
-if "preset_prompt"  not in st.session_state: st.session_state.preset_prompt  = ""
-if "prompt_input"   not in st.session_state: st.session_state.prompt_input   = ""
+def _init_session_state():
+    defaults = {
+        "last_result":    None,
+        "last_metrics":   None,
+        "last_run_id":    None,
+        "preset_prompt":  "",
+        "prompt_input":   "",
+        "chat_messages":  None,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+_init_session_state()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auth gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_auth() -> bool:
+    """
+    Check authentication status.
+    Returns True if user is logged in.
+    """
+    if is_logged_in():
+        return True
+
+    # Try to restore from session token
+    if restore_session():
+        return True
+
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,22 +196,24 @@ if "prompt_input"   not in st.session_state: st.session_state.prompt_input   = "
 def _render_sidebar():
     with st.sidebar:
         # Logo
-        st.markdown(f"""
-        <div style="text-align:center; padding: 20px 0 10px;">
-            <div style="font-size:32px;">⚡</div>
-            <div style="font-size:22px; font-weight:700;
-                        color:#1D9E75; letter-spacing:0.05em;">
-                {APP_TITLE}
-            </div>
-            <div style="font-size:11px; color:#64748B; margin-top:2px;">
-                v{APP_VERSION} · EV Scenario Sandbox
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="text-align:center;padding:16px 0 8px;">'
+            f'<div style="font-size:32px;">⚡</div>'
+            f'<div style="font-size:22px;font-weight:700;color:#1D9E75;">'
+            f'{APP_TITLE}</div>'
+            f'<div style="font-size:11px;color:#64748B;margin-top:2px;">'
+            f'v{APP_VERSION} · EV Intelligence Platform</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         st.divider()
 
-        # Quick scenario presets
+        # User info + logout
+        render_user_sidebar()
+        st.divider()
+
+        # Quick presets
         st.markdown("**⚡ Quick Presets**")
         presets = {
             "🌡️ Delhi Summer":    "Simulate an EV driving in extreme Delhi summer traffic with repeated fast charging.",
@@ -185,41 +231,41 @@ def _render_sidebar():
 
         st.divider()
 
-        # Recent runs summary
+        # Recent runs
         st.markdown("**📜 Recent Runs**")
-        history = get_all_runs(limit=8)
-        if not history:
-            st.caption("No runs yet. Run your first simulation!")
-        else:
-            for run in history:
-                m       = run["metrics"]
-                overall = m.get("overall_score", 0)
-                color   = (
-                    "#1D9E75" if overall >= 70 else
-                    "#D97706" if overall >= 45 else
-                    "#DC2626"
-                )
-                st.markdown(f"""
-                <div style="
-                    border-left: 3px solid {color};
-                    padding: 6px 10px;
-                    margin-bottom: 6px;
-                    border-radius: 4px;
-                    background: rgba(0,0,0,0.03);
-                ">
-                    <div style="font-size:11px; color:{color}; font-weight:600;">
-                        #{run['id']} · {overall:.0f}/100
-                    </div>
-                    <div style="font-size:11px; color:#64748B;
-                                white-space:nowrap; overflow:hidden;
-                                text-overflow:ellipsis; max-width:180px;">
-                        {run['prompt'][:50]}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+        user_id = get_user_id()
+        if user_id:
+            try:
+                history = get_all_simulation_runs(user_id, limit=6)
+                if not history:
+                    st.caption("No runs yet.")
+                else:
+                    for run in history:
+                        m       = run.get("metrics", {})
+                        overall = m.get("overall_score", 0)
+                        color   = (
+                            "#1D9E75" if overall >= 70 else
+                            "#D97706" if overall >= 45 else
+                            "#DC2626"
+                        )
+                        st.markdown(
+                            f'<div style="border-left:3px solid {color};'
+                            f'padding:6px 10px;margin-bottom:6px;'
+                            f'border-radius:4px;background:rgba(0,0,0,0.02);">'
+                            f'<div style="font-size:11px;color:{color};'
+                            f'font-weight:600;">{overall:.0f}/100</div>'
+                            f'<div style="font-size:11px;color:#64748B;'
+                            f'white-space:nowrap;overflow:hidden;'
+                            f'text-overflow:ellipsis;max-width:180px;">'
+                            f'{run["prompt"][:45]}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+            except Exception:
+                st.caption("Could not load history.")
 
         st.divider()
-        st.caption("Built with Streamlit · Groq LLaMA · Plotly")
+        st.caption(f"Built by Pratham Ahuja · GenEV v{APP_VERSION}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,10 +275,24 @@ def _render_sidebar():
 def _render_simulator_tab():
     st.markdown("## 🧪 EV Scenario Simulator")
     st.markdown(
+        "<p style='color:#64748B;font-size:13px;'>"
         "Describe any EV operating scenario in natural language. "
         "GenEV will parse it with Groq, generate synthetic telemetry, "
-        "simulate physics, compute metrics, and generate AI insights."
+        "simulate physics, compute metrics, and generate AI insights.</p>",
+        unsafe_allow_html=True,
     )
+
+    # ── Simulation limit check ────────────────────────────────────────────────
+    user_id = get_user_id()
+    sim_allowed, sim_used, sim_limit = check_simulation_limit(user_id)
+
+    if not sim_allowed:
+        st.warning(
+            f"You've used all {sim_limit} simulations for today. "
+            f"Upgrade to Premium for unlimited simulations, "
+            f"or your limit resets tomorrow.",
+            icon="⚠️",
+        )
 
     # ── Prompt input ──────────────────────────────────────────────────────────
     prompt = st.text_area(
@@ -246,7 +306,11 @@ def _render_simulator_tab():
 
     col_btn, col_seed, col_spacer = st.columns([2, 1, 4])
     with col_btn:
-        run_clicked = st.button("▶ Run Simulation", use_container_width=True)
+        run_clicked = st.button(
+            "▶ Run Simulation",
+            use_container_width=True,
+            disabled=not sim_allowed,
+        )
     with col_seed:
         seed = st.number_input(
             "Seed", min_value=0, max_value=9999,
@@ -254,8 +318,16 @@ def _render_simulator_tab():
             help="Random seed for reproducibility",
         )
 
+    # Usage display
+    if sim_limit < 999:
+        st.markdown(
+            f'<p style="font-size:11px;color:#94A3B8;">'
+            f'Simulations today: {sim_used}/{sim_limit}</p>',
+            unsafe_allow_html=True,
+        )
+
     # ── Run pipeline ──────────────────────────────────────────────────────────
-    if run_clicked:
+    if run_clicked and sim_allowed:
         actual_prompt = st.session_state.get("prompt_input", "").strip()
 
         if not actual_prompt:
@@ -282,8 +354,9 @@ def _render_simulator_tab():
             insights = generate_insights(result, metrics)
             st.write(f"✅ Generated {len(insights)} insights")
 
-            st.write("💾 Step 5 — Saving to database...")
-            run_id = save_run(
+            st.write("💾 Step 5 — Saving to your workspace...")
+            run_id = save_simulation_run(
+                user_id=user_id,
                 prompt=actual_prompt,
                 params=params,
                 metrics=metrics,
@@ -291,14 +364,16 @@ def _render_simulator_tab():
                 telemetry=result["telemetry"],
                 duration_sec=round(time.time() - t_start, 2),
             )
-            st.write(f"✅ Saved as Run #{run_id}")
+            st.write(f"✅ Saved to your personal workspace")
+
+            # Increment usage
+            increment_simulation_count(user_id)
 
             status.update(
                 label=f"✅ Simulation complete in {time.time() - t_start:.2f}s",
                 state="complete",
             )
 
-        # Clear preset after successful run
         st.session_state["preset_prompt"] = ""
 
         result["insights"] = insights
@@ -321,24 +396,19 @@ def _render_simulator_tab():
 
 
 def _render_empty_state():
-    st.markdown("""
-    <div style="
-        text-align:center;
-        padding: 60px 20px;
-        color:#64748B;
-    ">
-        <div style="font-size:48px; margin-bottom:16px;">⚡</div>
-        <div style="font-size:18px; font-weight:600;
-                    color:#334155; margin-bottom:8px;">
-            Ready to simulate
-        </div>
-        <div style="font-size:14px; line-height:1.7;
-                    max-width:400px; margin:0 auto; color:#64748B;">
-            Enter a scenario prompt above or pick a preset from the sidebar.
-            GenEV will generate realistic EV telemetry and AI-powered analysis.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="text-align:center;padding:60px 20px;">'
+        '<div style="font-size:48px;margin-bottom:16px;">⚡</div>'
+        '<div style="font-size:18px;font-weight:600;color:#334155;'
+        'margin-bottom:8px;">Ready to simulate</div>'
+        '<div style="font-size:14px;color:#64748B;line-height:1.7;'
+        'max-width:400px;margin:0 auto;">'
+        'Enter a scenario prompt above or pick a preset from the sidebar. '
+        'GenEV will generate realistic EV telemetry and AI-powered analysis.'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_extracted_params(params: dict):
@@ -358,38 +428,34 @@ def _render_extracted_params(params: dict):
         cols = st.columns(5)
         for i, (label, value) in enumerate(param_display):
             with cols[i % 5]:
-                st.markdown(f"""
-                <div style="
-                    background: rgba(29,158,117,0.08);
-                    border: 1px solid rgba(29,158,117,0.20);
-                    border-radius: 8px;
-                    padding: 10px 12px;
-                    margin-bottom: 8px;
-                    text-align: center;
-                ">
-                    <div style="font-size:11px; color:#64748B;">{label}</div>
-                    <div style="font-size:14px; font-weight:600;
-                                color:#1E293B; margin-top:2px;">{value}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="background:rgba(29,158,117,0.06);'
+                    f'border:1px solid rgba(29,158,117,0.15);'
+                    f'border-radius:8px;padding:10px 12px;'
+                    f'margin-bottom:8px;text-align:center;">'
+                    f'<div style="font-size:11px;color:#64748B;">{label}</div>'
+                    f'<div style="font-size:13px;font-weight:600;'
+                    f'color:#1E293B;margin-top:2px;">{value}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 def _render_results(result: dict, metrics: dict):
+    """Render full results dashboard."""
 
-    # ── Overall score + grade badges ──────────────────────────────────────────
+    # Overall score
     render_overall_score(metrics, result["scenario_label"])
     render_grade_badges(metrics)
     render_ai_gain_banner(metrics)
 
-    # ── Metric cards ──────────────────────────────────────────────────────────
+    # Metric cards
     st.markdown("### 📊 Performance Metrics")
     render_metric_cards(metrics)
-
-    # ── Risk flags ────────────────────────────────────────────────────────────
     render_risk_flags(metrics["risk_flags"])
     st.divider()
 
-    # ── Charts row 1 — Battery + Thermal ─────────────────────────────────────
+    # Charts
     st.markdown("### 📈 Telemetry Visualisation")
     col1, col2 = st.columns(2)
     with col1:
@@ -397,21 +463,19 @@ def _render_results(result: dict, metrics: dict):
     with col2:
         st.plotly_chart(thermal_chart(result["telemetry"]), use_container_width=True)
 
-    # ── Charts row 2 — Speed + Voltage ───────────────────────────────────────
     col3, col4 = st.columns(2)
     with col3:
         st.plotly_chart(speed_chart(result["telemetry"]), use_container_width=True)
     with col4:
         st.plotly_chart(voltage_chart(result["telemetry"]), use_container_width=True)
 
-    # ── Charts row 3 — Regen + Power ─────────────────────────────────────────
     col5, col6 = st.columns(2)
     with col5:
         st.plotly_chart(regen_chart(result["telemetry"]), use_container_width=True)
     with col6:
         st.plotly_chart(power_chart(result["telemetry"]), use_container_width=True)
 
-    # ── Radar + Summary stats ─────────────────────────────────────────────────
+    # Radar + Summary
     st.divider()
     col_radar, col_stats = st.columns([1, 1])
     with col_radar:
@@ -419,36 +483,84 @@ def _render_results(result: dict, metrics: dict):
     with col_stats:
         render_summary_stats(result["summary"])
 
-    # ── AI Insights ───────────────────────────────────────────────────────────
+    # AI Insights
     st.divider()
     st.markdown("### 🤖 AI Insights")
-    insights = result.get("insights", [])
-    for i, insight in enumerate(insights):
-        st.markdown(f"""
-        <div style="
-            background: rgba(29,158,117,0.06);
-            border-left: 3px solid #1D9E75;
-            border-radius: 6px;
-            padding: 12px 16px;
-            margin-bottom: 10px;
-            font-size: 14px;
-            color: #1E293B;
-            line-height: 1.7;
-        ">
-            <span style="color:#1D9E75; font-weight:600;">{i + 1}.</span>
-            {insight}
-        </div>
-        """, unsafe_allow_html=True)
+    for i, insight in enumerate(result.get("insights", []), 1):
+        st.markdown(
+            f'<div style="background:rgba(29,158,117,0.05);'
+            f'border-left:3px solid #1D9E75;border-radius:6px;'
+            f'padding:12px 16px;margin-bottom:10px;font-size:14px;'
+            f'color:#1E293B;line-height:1.7;">'
+            f'<span style="color:#1D9E75;font-weight:600;">{i}.</span> '
+            f'{insight}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # PDF Export
+    st.divider()
+    _render_pdf_export(result, metrics)
+
+
+def _render_pdf_export(result: dict, metrics: dict):
+    """Render PDF export button."""
+    st.markdown("### 📄 Export Report")
+
+    premium = is_premium()
+
+    if not premium:
+        st.markdown(
+            '<div style="background:#FEF3C7;border:1px solid #D97706;'
+            'border-radius:10px;padding:12px 16px;font-size:13px;color:#1E293B;">'
+            '🔒 <strong>PDF Export</strong> is a Premium feature. '
+            'Upgrade to download branded simulation reports.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    if st.button("📄 Download PDF Report", key="pdf_export_btn"):
+        with st.spinner("Generating PDF report..."):
+            try:
+                pdf_bytes = generate_pdf(
+                    simulation_result=result,
+                    metrics=metrics,
+                    insights=result.get("insights", []),
+                    user_name=get_user_name(),
+                    prompt=st.session_state.get("prompt_input", ""),
+                )
+                st.download_button(
+                    label="⬇️ Click to Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"genev_report_{result['scenario_label'][:30].replace(' ', '_')}.pdf",
+                    mime="application/pdf",
+                    key="pdf_download_btn",
+                )
+            except Exception as e:
+                st.error(f"PDF generation failed: {e}", icon="🔴")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 2 — History
+# Tab 3 — History
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _render_history_tab():
-    st.markdown("## 📜 Simulation History")
+    st.markdown("## 📜 My Simulation History")
+    st.markdown(
+        "<p style='color:#64748B;font-size:13px;'>"
+        "Your personal simulation runs — only visible to you.</p>",
+        unsafe_allow_html=True,
+    )
 
-    history = get_all_runs(limit=50)
+    user_id = get_user_id()
+    if not user_id:
+        return
+
+    try:
+        history = get_all_simulation_runs(user_id, limit=50)
+    except Exception as e:
+        st.error(f"Could not load history: {e}", icon="🔴")
+        return
 
     if not history:
         st.info("No simulations saved yet. Run your first scenario!", icon="ℹ️")
@@ -457,75 +569,78 @@ def _render_history_tab():
     st.markdown(f"**{len(history)} runs saved**")
 
     for run in history:
-        m       = run["metrics"]
+        m       = run.get("metrics", {})
         overall = m.get("overall_score", 0)
         color   = (
             "#1D9E75" if overall >= 70 else
             "#D97706" if overall >= 45 else
             "#DC2626"
         )
-        created = run["created_at"][:16].replace("T", " ")
+        created = run.get("created_at", "")[:16].replace("T", " ")
 
         with st.expander(
-            f"#{run['id']} — {run['prompt'][:70]}{'...' if len(run['prompt']) > 70 else ''}",
+            f"#{run['id'][:8]}... — {run['prompt'][:65]}"
+            f"{'...' if len(run['prompt']) > 65 else ''}",
             expanded=False,
         ):
             col_info, col_metrics, col_actions = st.columns([3, 3, 1])
 
             with col_info:
-                st.markdown(f"""
-                <div style="font-size:12px; color:#64748B; margin-bottom:6px;">
-                    🕐 {created} UTC · Run #{run['id']}
-                </div>
-                <div style="font-size:13px; color:#1E293B; line-height:1.6;">
-                    {run['prompt']}
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div style="font-size:12px;color:#64748B;margin-bottom:6px;">'
+                    f'🕐 {created} UTC</div>'
+                    f'<div style="font-size:13px;color:#1E293B;line-height:1.6;">'
+                    f'{run["prompt"]}</div>',
+                    unsafe_allow_html=True,
+                )
 
             with col_metrics:
-                mini_metrics = [
+                mini = [
                     ("Overall",    overall,                          True),
                     ("Efficiency", m.get("efficiency_score", 0),    True),
                     ("Stress",     m.get("battery_stress_index", 0), False),
                     ("Thermal",    m.get("thermal_risk_pct", 0),    False),
                 ]
-                for label, val, hib in mini_metrics:
+                for label, val, hib in mini:
                     c = (
                         "#1D9E75" if (val >= 70 if hib else val <= 30) else
                         "#D97706" if (val >= 45 if hib else val <= 60) else
                         "#DC2626"
                     )
-                    st.markdown(f"""
-                    <div style="display:flex; justify-content:space-between;
-                                padding:4px 0; font-size:12px;
-                                border-bottom:1px solid rgba(0,0,0,0.06);">
-                        <span style="color:#64748B;">{label}</span>
-                        <span style="color:{c}; font-weight:600;">{val:.1f}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'padding:4px 0;font-size:12px;'
+                        f'border-bottom:1px solid #F1F5F9;">'
+                        f'<span style="color:#64748B;">{label}</span>'
+                        f'<span style="color:{c};font-weight:600;">{val:.1f}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
             with col_actions:
-                if st.button("📂 Load", key=f"load_{run['id']}",use_container_width=True):
-                    full = get_run_by_id(run["id"])
+                if st.button("📂 Load", key=f"load_{run['id']}",
+                             use_container_width=True):
+                    full = get_simulation_run_by_id(run["id"], user_id)
                     if full:
-                        from simulation_engine.simulator import _enrich_telemetry
-                        enriched_telemetry = _enrich_telemetry(full["telemetry"], full["params"])
+                        enriched = _enrich_telemetry(
+                            full["telemetry"], full["params"]
+                        )
                         reconstructed = {
-                            "telemetry":      enriched_telemetry,
-                            "summary":        _recompute_summary(full["telemetry"], full["params"]),
+                            "telemetry":      enriched,
+                            "summary":        _compute_summary(enriched, full["params"]),
                             "params":         full["params"],
-                            "scenario_label": _build_label(full["params"]),
+                            "scenario_label": _build_scenario_label(full["params"]),
                             "insights":       full["insights"],
                         }
                         st.session_state.last_result  = reconstructed
                         st.session_state.last_metrics = full["metrics"]
                         st.session_state.last_run_id  = full["id"]
-                        st.success(f"Run #{run['id']} loaded!", icon="✅")
+                        st.success(f"Loaded!", icon="✅")
                         st.rerun()
 
                 if st.button("🗑️ Delete", key=f"del_{run['id']}",
                              use_container_width=True):
-                    delete_run(run["id"])
+                    delete_simulation_run(run["id"], user_id)
                     if st.session_state.last_run_id == run["id"]:
                         st.session_state.last_result  = None
                         st.session_state.last_metrics = None
@@ -533,123 +648,87 @@ def _render_history_tab():
                     st.rerun()
 
 
-def _recompute_summary(telemetry: list, params: dict) -> dict:
-    from simulation_engine.simulator import _compute_summary, _enrich_telemetry
-    # Re-enrich telemetry loaded from DB — it's missing derived fields
-    enriched = _enrich_telemetry(telemetry, params)
-    return _compute_summary(enriched, params)
-
-
-def _build_label(params: dict) -> str:
-    from simulation_engine.simulator import _build_scenario_label
-    return _build_scenario_label(params)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 4 — About
+# Tab 4 — Comparison (user-isolated)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _render_about_tab():
-    st.markdown("## ℹ️ About GenEV")
+def _render_comparison_tab():
+    """
+    Comparison tab — passes user_id so only user's own runs are shown.
+    Overrides the comparison panel's internal data fetch.
+    """
+    user_id = get_user_id()
+    if not user_id:
+        return
 
-    st.markdown("""
-    <div style="
-        background: rgba(29,158,117,0.08);
-        border: 1px solid rgba(29,158,117,0.25);
-        border-radius: 12px;
-        padding: 20px 24px;
-        margin-bottom: 20px;
-    ">
-        <div style="font-size:20px; font-weight:700;
-                    color:#1D9E75; margin-bottom:8px;">
-            ⚡ GenEV — Generative AI EV Scenario Sandbox
-        </div>
-        <div style="font-size:14px; color:#1E293B; line-height:1.8;">
-            GenEV is an AI-powered interactive platform that generates realistic EV
-            operating scenarios from natural language prompts and simulates battery
-            behaviour, thermal stress, charging efficiency, and operational risks in
-            real time.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### 🔀 Scenario Comparison")
+    st.markdown(
+        "Compare up to **4 of your past runs** side-by-side. "
+        "Deltas shown relative to the first selected run."
+    )
 
-    col1, col2 = st.columns(2)
+    try:
+        all_runs = get_all_simulation_runs(user_id, limit=50)
+    except Exception as e:
+        st.error(f"Could not load runs: {e}", icon="🔴")
+        return
 
-    with col1:
-        st.markdown("### 🧠 How It Works")
-        pipeline = [
-            ("1", "Natural Language Prompt",  "You describe any EV scenario in plain English."),
-            ("2", "LLM Scenario Parsing",     "Groq LLaMA extracts structured parameters."),
-            ("3", "Synthetic Telemetry",      "NumPy generates realistic time-series data using EV physics."),
-            ("4", "Simulation Engine",        "Physics-based computations model battery, thermal, and power behaviour."),
-            ("5", "Metric Evaluation",        "6 metrics quantify efficiency, stress, risk, and stability."),
-            ("6", "AI Insight Generation",    "Groq explains what happened and why, with recommendations."),
-        ]
-        for num, title, desc in pipeline:
-            st.markdown(f"""
-            <div style="display:flex; gap:14px; align-items:flex-start; margin-bottom:14px;">
-                <div style="
-                    background:#1D9E75; color:white;
-                    border-radius:50%; width:26px; height:26px;
-                    display:flex; align-items:center; justify-content:center;
-                    font-size:12px; font-weight:700; flex-shrink:0;
-                ">{num}</div>
-                <div>
-                    <div style="font-size:13px; font-weight:600; color:#1E293B;">{title}</div>
-                    <div style="font-size:12px; color:#64748B; margin-top:2px; line-height:1.5;">{desc}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    if len(all_runs) < 2:
+        st.info(
+            "Run at least **2 simulations** to enable comparison.",
+            icon="ℹ️",
+        )
+        return
 
-    with col2:
-        st.markdown("### 🛠️ Tech Stack")
-        stack = [
-            ("🤖", "Groq LLaMA 3.3 70B", "LLM for scenario parsing and insight generation"),
-            ("🌐", "Streamlit",           "Interactive web frontend"),
-            ("📊", "Plotly",             "Interactive data visualisation"),
-            ("🔢", "NumPy",              "Physics simulation and telemetry generation"),
-            ("🗄️", "SQLite",             "Persistent run storage and history"),
-            ("🐍", "Python",             "Core language — simulation engine and backend"),
-        ]
-        for icon, name, desc in stack:
-            st.markdown(f"""
-            <div style="
-                background: rgba(0,0,0,0.03);
-                border-radius: 8px;
-                padding: 10px 14px;
-                margin-bottom: 8px;
-                display: flex;
-                align-items: center;
-                gap: 12px;
-            ">
-                <span style="font-size:20px;">{icon}</span>
-                <div>
-                    <div style="font-size:13px; font-weight:600; color:#1E293B;">{name}</div>
-                    <div style="font-size:11px; color:#64748B;">{desc}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    run_options = {
+        f"{run['prompt'][:55]}{'...' if len(run['prompt']) > 55 else ''} "
+        f"[{run.get('created_at','')[:10]}]": run["id"]
+        for run in all_runs
+    }
 
-        st.markdown("### 📊 Metrics Computed")
-        metrics_list = [
-            ("⚡", "Energy Efficiency Score",   "Distance / energy, normalised 0–100"),
-            ("🔋", "Battery Stress Index",      "Thermal + charge + accel + discharge stress"),
-            ("🌡️", "Thermal Risk Probability",  "Likelihood of overheating event"),
-            ("📊", "Stability Score",           "Voltage + thermal consistency"),
-            ("🔌", "Charging Efficiency",       "Energy stored vs energy supplied"),
-            ("🤖", "AI Optimisation Gain",      "Estimated improvement from AI recommendations"),
-        ]
-        for icon, name, formula in metrics_list:
-            st.markdown(f"""
-            <div style="
-                padding: 7px 0;
-                border-bottom: 1px solid rgba(0,0,0,0.06);
-                font-size: 12px;
-            ">
-                <span style="color:#1D9E75;">{icon} {name}</span>
-                <span style="color:#64748B; margin-left:8px;">— {formula}</span>
-            </div>
-            """, unsafe_allow_html=True)
+    selected_labels = st.multiselect(
+        "Select runs to compare",
+        options=list(run_options.keys()),
+        default=list(run_options.keys())[:2],
+        max_selections=4,
+    )
+
+    if len(selected_labels) < 2:
+        st.warning("Please select at least 2 runs.", icon="⚠️")
+        return
+
+    selected_ids = [run_options[lbl] for lbl in selected_labels]
+    runs = get_runs_for_comparison(selected_ids, user_id)
+
+    if len(runs) < 2:
+        st.error("Could not load run data.", icon="🔴")
+        return
+
+    # Enrich telemetry for each run
+    for run in runs:
+        if run.get("telemetry") and "power_kw" not in run["telemetry"][0]:
+            run["telemetry"] = _enrich_telemetry(
+                run["telemetry"], run["params"]
+            )
+
+    # Import and call the comparison rendering functions directly
+    from frontend.components.comparison import (
+        _render_scenario_labels,
+        _render_metric_diff_table,
+        _render_comparison_charts,
+        _render_telemetry_overlay,
+        _render_winner_summary,
+    )
+
+    _render_scenario_labels(runs)
+    st.divider()
+    _render_metric_diff_table(runs)
+    st.divider()
+    _render_comparison_charts(runs)
+    st.divider()
+    _render_telemetry_overlay(runs)
+    st.divider()
+    _render_winner_summary(runs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -657,12 +736,29 @@ def _render_about_tab():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    # ── Auth gate ─────────────────────────────────────────────────────────────
+    if not _check_auth():
+        render_auth_page()
+        return
+
+    # ── Authenticated layout ──────────────────────────────────────────────────
     _render_sidebar()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # Build simulation context for AI chat
+    sim_context = None
+    if st.session_state.last_result and st.session_state.last_metrics:
+        sim_context = {
+            **st.session_state.last_result,
+            "metrics": st.session_state.last_metrics,
+        }
+
+    # Tabs
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧪 Simulator",
+        "🤖 AI Chat",
         "📜 History",
         "🔀 Comparison",
+        "💎 Premium",
         "ℹ️ About",
     ])
 
@@ -670,13 +766,31 @@ def main():
         _render_simulator_tab()
 
     with tab2:
-        _render_history_tab()
+        render_ai_chat(simulation_context=sim_context)
 
     with tab3:
-        render_comparison_panel()
+        _render_history_tab()
 
     with tab4:
-        _render_about_tab()
+        _render_comparison_tab()
+
+    with tab5:
+        render_subscription_page()
+
+    with tab6:
+        render_about_page()
+
+    # Global footer
+    st.markdown(
+        f'<div style="text-align:center;padding:16px;'
+        f'border-top:1px solid #E2E8F0;margin-top:20px;">'
+        f'<span style="font-size:11px;color:#94A3B8;">'
+        f'Built by <strong style="color:#1D9E75;">Pratham Ahuja</strong> · '
+        f'GenEV v{APP_VERSION} · AI-Powered EV Intelligence'
+        f'</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
