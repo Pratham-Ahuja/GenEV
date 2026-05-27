@@ -30,6 +30,7 @@ from auth.auth_handler import (
     get_user_id,
     get_user_name,
     get_profile_cached,
+    refresh_profile,
     is_premium,
     sign_out,
 )
@@ -44,7 +45,12 @@ from database.supabase_client import (
     increment_simulation_count,
 )
 from simulation_engine.scenario_parser import parse_scenario
-from simulation_engine.simulator import run_simulation, _compute_summary, _build_scenario_label, _enrich_telemetry
+from simulation_engine.simulator import (
+    run_simulation,
+    _compute_summary,
+    _build_scenario_label,
+    _enrich_telemetry,
+)
 from simulation_engine.metrics import compute_metrics
 from ai_insights.insight_engine import generate_insights
 from export.pdf_exporter import generate_pdf
@@ -65,7 +71,6 @@ from frontend.components.metrics_panel import (
     render_summary_stats,
     render_ai_gain_banner,
 )
-from frontend.components.comparison import render_comparison_panel
 from frontend.components.ai_chat import render_ai_chat
 from frontend.components.subscription import render_subscription_page
 from frontend.components.about import render_about_page
@@ -89,7 +94,6 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Buttons */
     .stButton > button {
         background: linear-gradient(135deg, #1D9E75, #15795A) !important;
         color: white !important;
@@ -101,25 +105,17 @@ st.markdown("""
         transition: opacity 0.2s !important;
     }
     .stButton > button:hover { opacity: 0.88 !important; }
-
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        border-radius: 10px;
-        padding: 4px;
+        gap: 8px; border-radius: 10px; padding: 4px;
     }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 6px 18px;
-        font-size: 13px;
+        border-radius: 8px; padding: 6px 18px; font-size: 13px;
     }
     .stTabs [aria-selected="true"] {
         background: rgba(29,158,117,0.15) !important;
         color: #1D9E75 !important;
         font-weight: 600;
     }
-
-    /* Text area */
     .stTextArea textarea {
         border: 1.5px solid #CBD5E1 !important;
         border-radius: 10px !important;
@@ -129,20 +125,12 @@ st.markdown("""
         border-color: #1D9E75 !important;
         box-shadow: 0 0 0 2px rgba(29,158,117,0.20) !important;
     }
-
-    /* Multiselect */
     .stMultiSelect [data-baseweb="tag"] {
         background: rgba(29,158,117,0.20) !important;
         color: #1D9E75 !important;
     }
-
-    /* Spinner */
     .stSpinner > div { border-top-color: #1D9E75 !important; }
-
-    /* Alerts */
     .stAlert { border-radius: 10px !important; }
-
-    /* Sidebar */
     [data-testid="stSidebar"] {
         border-right: 1px solid #E2E8F0 !important;
     }
@@ -156,12 +144,12 @@ st.markdown("""
 
 def _init_session_state():
     defaults = {
-        "last_result":    None,
-        "last_metrics":   None,
-        "last_run_id":    None,
-        "preset_prompt":  "",
-        "prompt_input":   "",
-        "chat_messages":  None,
+        "last_result":   None,
+        "last_metrics":  None,
+        "last_run_id":   None,
+        "preset_prompt": "",
+        "prompt_input":  "",
+        "chat_messages": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -175,17 +163,10 @@ _init_session_state()
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _check_auth() -> bool:
-    """
-    Check authentication status.
-    Returns True if user is logged in.
-    """
     if is_logged_in():
         return True
-
-    # Try to restore from session token
     if restore_session():
         return True
-
     return False
 
 
@@ -195,7 +176,6 @@ def _check_auth() -> bool:
 
 def _render_sidebar():
     with st.sidebar:
-        # Logo
         st.markdown(
             f'<div style="text-align:center;padding:16px 0 8px;">'
             f'<div style="font-size:32px;">⚡</div>'
@@ -208,8 +188,6 @@ def _render_sidebar():
         )
 
         st.divider()
-
-        # User info + logout
         render_user_sidebar()
         st.divider()
 
@@ -282,8 +260,9 @@ def _render_simulator_tab():
         unsafe_allow_html=True,
     )
 
-    # ── Simulation limit check ────────────────────────────────────────────────
     user_id = get_user_id()
+
+    # ── Always fetch fresh limit — never use cache ────────────────────────────
     sim_allowed, sim_used, sim_limit = check_simulation_limit(user_id)
 
     if not sim_allowed:
@@ -318,11 +297,12 @@ def _render_simulator_tab():
             help="Random seed for reproducibility",
         )
 
-    # Usage display
+    # Usage counter display
     if sim_limit < 999:
+        color = "#DC2626" if sim_used >= sim_limit else "#64748B"
         st.markdown(
-            f'<p style="font-size:11px;color:#94A3B8;">'
-            f'Simulations today: {sim_used}/{sim_limit}</p>',
+            f'<p style="font-size:12px;color:{color};font-weight:500;">'
+            f'🧪 Simulations today: {sim_used}/{sim_limit}</p>',
             unsafe_allow_html=True,
         )
 
@@ -364,10 +344,13 @@ def _render_simulator_tab():
                 telemetry=result["telemetry"],
                 duration_sec=round(time.time() - t_start, 2),
             )
-            st.write(f"✅ Saved to your personal workspace")
+            st.write("✅ Saved to your personal workspace")
 
-            # Increment usage
+            st.write("📈 Step 6 — Updating usage count...")
+            # ── Increment THEN invalidate cache so sidebar refreshes ──────────
             increment_simulation_count(user_id)
+            refresh_profile()   # ← force profile cache refresh in session state
+            st.write("✅ Usage count updated")
 
             status.update(
                 label=f"✅ Simulation complete in {time.time() - t_start:.2f}s",
@@ -375,11 +358,10 @@ def _render_simulator_tab():
             )
 
         st.session_state["preset_prompt"] = ""
-
-        result["insights"] = insights
-        st.session_state.last_result  = result
-        st.session_state.last_metrics = metrics
-        st.session_state.last_run_id  = run_id
+        result["insights"]              = insights
+        st.session_state.last_result    = result
+        st.session_state.last_metrics   = metrics
+        st.session_state.last_run_id    = run_id
         st.rerun()
 
     # ── Results ───────────────────────────────────────────────────────────────
@@ -442,20 +424,15 @@ def _render_extracted_params(params: dict):
 
 
 def _render_results(result: dict, metrics: dict):
-    """Render full results dashboard."""
-
-    # Overall score
     render_overall_score(metrics, result["scenario_label"])
     render_grade_badges(metrics)
     render_ai_gain_banner(metrics)
 
-    # Metric cards
     st.markdown("### 📊 Performance Metrics")
     render_metric_cards(metrics)
     render_risk_flags(metrics["risk_flags"])
     st.divider()
 
-    # Charts
     st.markdown("### 📈 Telemetry Visualisation")
     col1, col2 = st.columns(2)
     with col1:
@@ -475,7 +452,6 @@ def _render_results(result: dict, metrics: dict):
     with col6:
         st.plotly_chart(power_chart(result["telemetry"]), use_container_width=True)
 
-    # Radar + Summary
     st.divider()
     col_radar, col_stats = st.columns([1, 1])
     with col_radar:
@@ -483,7 +459,6 @@ def _render_results(result: dict, metrics: dict):
     with col_stats:
         render_summary_stats(result["summary"])
 
-    # AI Insights
     st.divider()
     st.markdown("### 🤖 AI Insights")
     for i, insight in enumerate(result.get("insights", []), 1):
@@ -497,18 +472,14 @@ def _render_results(result: dict, metrics: dict):
             unsafe_allow_html=True,
         )
 
-    # PDF Export
     st.divider()
     _render_pdf_export(result, metrics)
 
 
 def _render_pdf_export(result: dict, metrics: dict):
-    """Render PDF export button."""
     st.markdown("### 📄 Export Report")
 
-    premium = is_premium()
-
-    if not premium:
+    if not is_premium():
         st.markdown(
             '<div style="background:#FEF3C7;border:1px solid #D97706;'
             'border-radius:10px;padding:12px 16px;font-size:13px;color:#1E293B;">'
@@ -596,10 +567,10 @@ def _render_history_tab():
 
             with col_metrics:
                 mini = [
-                    ("Overall",    overall,                          True),
-                    ("Efficiency", m.get("efficiency_score", 0),    True),
+                    ("Overall",    overall,                           True),
+                    ("Efficiency", m.get("efficiency_score", 0),     True),
                     ("Stress",     m.get("battery_stress_index", 0), False),
-                    ("Thermal",    m.get("thermal_risk_pct", 0),    False),
+                    ("Thermal",    m.get("thermal_risk_pct", 0),     False),
                 ]
                 for label, val, hib in mini:
                     c = (
@@ -635,7 +606,7 @@ def _render_history_tab():
                         st.session_state.last_result  = reconstructed
                         st.session_state.last_metrics = full["metrics"]
                         st.session_state.last_run_id  = full["id"]
-                        st.success(f"Loaded!", icon="✅")
+                        st.success("Loaded!", icon="✅")
                         st.rerun()
 
                 if st.button("🗑️ Delete", key=f"del_{run['id']}",
@@ -649,14 +620,10 @@ def _render_history_tab():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 4 — Comparison (user-isolated)
+# Tab 4 — Comparison
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _render_comparison_tab():
-    """
-    Comparison tab — passes user_id so only user's own runs are shown.
-    Overrides the comparison panel's internal data fetch.
-    """
     user_id = get_user_id()
     if not user_id:
         return
@@ -674,10 +641,7 @@ def _render_comparison_tab():
         return
 
     if len(all_runs) < 2:
-        st.info(
-            "Run at least **2 simulations** to enable comparison.",
-            icon="ℹ️",
-        )
+        st.info("Run at least **2 simulations** to enable comparison.", icon="ℹ️")
         return
 
     run_options = {
@@ -704,14 +668,12 @@ def _render_comparison_tab():
         st.error("Could not load run data.", icon="🔴")
         return
 
-    # Enrich telemetry for each run
     for run in runs:
         if run.get("telemetry") and "power_kw" not in run["telemetry"][0]:
             run["telemetry"] = _enrich_telemetry(
                 run["telemetry"], run["params"]
             )
 
-    # Import and call the comparison rendering functions directly
     from frontend.components.comparison import (
         _render_scenario_labels,
         _render_metric_diff_table,
@@ -752,7 +714,6 @@ def main():
             "metrics": st.session_state.last_metrics,
         }
 
-    # Tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🧪 Simulator",
         "🤖 AI Chat",
@@ -780,7 +741,6 @@ def main():
     with tab6:
         render_about_page()
 
-    # Global footer
     st.markdown(
         f'<div style="text-align:center;padding:16px;'
         f'border-top:1px solid #E2E8F0;margin-top:20px;">'

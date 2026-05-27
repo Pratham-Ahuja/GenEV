@@ -8,7 +8,6 @@ Functions
 - sign_up()        — create new account + profile
 - sign_in()        — login with email/password
 - sign_out()       — logout current session
-- get_session()    — get current session from Streamlit state
 - is_logged_in()   — check if user is authenticated
 - get_user_id()    — get current user's UUID
 - get_user_email() — get current user's email
@@ -16,7 +15,6 @@ Functions
 
 import streamlit as st
 from typing import Optional
-from supabase import Client
 
 from database.supabase_client import (
     get_client,
@@ -30,10 +28,10 @@ from database.supabase_client import (
 # Session state keys
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SESSION_KEY   = "genev_session"
-_USER_KEY      = "genev_user"
-_PROFILE_KEY   = "genev_profile"
-_TOKEN_KEY     = "genev_access_token"
+_SESSION_KEY = "genev_session"
+_USER_KEY    = "genev_user"
+_PROFILE_KEY = "genev_profile"
+_TOKEN_KEY   = "genev_access_token"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +118,7 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
             return False, "Invalid email or password."
 
         _store_session(response)
-        return True, f"Welcome back!"
+        return True, "Welcome back!"
 
     except Exception as e:
         error_msg = str(e)
@@ -136,21 +134,19 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sign_out() -> None:
-    """Sign out current user and clear session state."""
+    """Sign out current user and clear all session state."""
     try:
         client = get_client()
         client.auth.sign_out()
     except Exception:
         pass
 
-    # Clear all session state keys
     for key in [_SESSION_KEY, _USER_KEY, _PROFILE_KEY, _TOKEN_KEY]:
         if key in st.session_state:
             del st.session_state[key]
 
-    # Clear simulation state
     for key in ["last_result", "last_metrics", "last_run_id",
-                "preset_prompt", "prompt_input"]:
+                "preset_prompt", "prompt_input", "chat_messages"]:
         if key in st.session_state:
             del st.session_state[key]
 
@@ -168,7 +164,7 @@ def _store_session(response) -> None:
     # Inject token into Supabase client for RLS
     set_auth_token(response.session.access_token)
 
-    # Load and cache profile
+    # Always fetch fresh profile on login — never use stale cache
     profile = get_profile(response.user.id)
     st.session_state[_PROFILE_KEY] = profile
 
@@ -184,14 +180,19 @@ def restore_session() -> bool:
 
     try:
         set_auth_token(token)
-        client = get_client()
+        client  = get_client()
         response = client.auth.get_user(token)
+
         if response and response.user:
+            st.session_state[_USER_KEY] = response.user
+            # Always fetch fresh profile on restore
+            profile = get_profile(response.user.id)
+            st.session_state[_PROFILE_KEY] = profile
             return True
+
     except Exception:
         pass
 
-    # Token invalid — clear state
     sign_out()
     return False
 
@@ -199,7 +200,7 @@ def restore_session() -> bool:
 def is_logged_in() -> bool:
     """Check if a user is currently logged in."""
     return (
-        _USER_KEY in st.session_state
+        _USER_KEY  in st.session_state
         and st.session_state[_USER_KEY] is not None
         and _TOKEN_KEY in st.session_state
     )
@@ -218,7 +219,10 @@ def get_user_email() -> Optional[str]:
 
 
 def get_profile_cached() -> Optional[dict]:
-    """Get current user's profile from cache or fetch from Supabase."""
+    """
+    Get current user's profile.
+    Uses session state cache but always re-fetches after cache invalidation.
+    """
     profile = st.session_state.get(_PROFILE_KEY)
     if profile:
         return profile
@@ -227,16 +231,22 @@ def get_profile_cached() -> Optional[dict]:
     if not user_id:
         return None
 
+    # Cache miss — fetch fresh from Supabase
     profile = get_profile(user_id)
     st.session_state[_PROFILE_KEY] = profile
     return profile
 
 
 def refresh_profile() -> Optional[dict]:
-    """Force refresh user profile from Supabase."""
+    """
+    Force refresh user profile from Supabase.
+    Call this after any profile update to keep UI in sync.
+    """
     user_id = get_user_id()
     if not user_id:
         return None
+
+    # Always fetch fresh — bypass cache
     profile = get_profile(user_id)
     st.session_state[_PROFILE_KEY] = profile
     return profile
@@ -252,9 +262,23 @@ def get_user_name() -> str:
 
 
 def get_subscription_plan() -> str:
-    """Get current user's subscription plan."""
-    profile = get_profile_cached()
-    return profile.get("subscription_plan", "free") if profile else "free"
+    """
+    Get current user's subscription plan.
+    Always fetches fresh — never cached — so premium activation
+    reflects immediately without restart.
+    """
+    user_id = get_user_id()
+    if not user_id:
+        return "free"
+
+    # Fetch fresh profile directly — bypass session cache
+    profile = get_profile(user_id)
+    if profile:
+        # Update cache with fresh data
+        st.session_state[_PROFILE_KEY] = profile
+        return profile.get("subscription_plan", "free")
+
+    return "free"
 
 
 def is_premium() -> bool:
