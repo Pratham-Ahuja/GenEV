@@ -48,6 +48,15 @@ def _format_source(source: str) -> str:
     )
 
 
+def _ensure_chat_list() -> None:
+    """
+    Guarantee st.session_state.chat_messages is always a list.
+    Handles None, missing key, and wrong type all in one place.
+    """
+    if not isinstance(st.session_state.get("chat_messages"), list):
+        st.session_state.chat_messages = []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main render function
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +76,9 @@ def render_ai_chat(simulation_context: dict = None) -> None:
     if not user_id:
         st.warning("Please log in to use AI Chat.", icon="⚠️")
         return
+
+    # ── Ensure chat list is valid on every render ─────────────────────────────
+    _ensure_chat_list()
 
     # ── Header ────────────────────────────────────────────────────────────────
     st.markdown("## 🤖 GenEV AI Chat")
@@ -132,7 +144,7 @@ def _render_question_limit_bar(user_id: str) -> None:
     else:
         label_color = "#D97706"
 
-    pct = min(100, int((used / limit) * 100)) if limit > 0 else 100
+    pct       = min(100, int((used / limit) * 100)) if limit > 0 else 100
     bar_color = label_color
 
     st.markdown(
@@ -173,11 +185,11 @@ def _render_question_limit_bar(user_id: str) -> None:
 def _render_chat_history(user_id: str) -> None:
     """Render chat message history."""
 
-    # Load from Supabase on first render
-    if "chat_messages" not in st.session_state:
+    # Load from Supabase only on first render (when list is empty)
+    if isinstance(st.session_state.get("chat_messages"), list) and \
+       len(st.session_state.chat_messages) == 0:
         try:
             history = get_chat_history(user_id, limit=20)
-            st.session_state.chat_messages = []
             for msg in history:
                 if msg.get("question"):
                     st.session_state.chat_messages.append({
@@ -194,12 +206,10 @@ def _render_chat_history(user_id: str) -> None:
                         "time":    msg.get("created_at", ""),
                     })
         except Exception:
-            st.session_state.chat_messages = []
+            pass
 
     # Chat container
-    chat_container = st.container()
-
-    with chat_container:
+    with st.container():
         if not st.session_state.chat_messages:
             _render_empty_chat_state()
         else:
@@ -207,7 +217,7 @@ def _render_chat_history(user_id: str) -> None:
                 _render_message(msg)
 
     # Clear chat button
-    if st.session_state.get("chat_messages"):
+    if st.session_state.chat_messages:
         col1, col2 = st.columns([6, 1])
         with col2:
             if st.button(
@@ -258,11 +268,9 @@ def _render_message(msg: dict) -> None:
             unsafe_allow_html=True,
         )
     else:
-        # Format markdown bold to HTML
         formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', content)
         formatted = formatted.replace("\n", "<br>")
 
-        # Build sources badges
         sources_html = ""
         if sources:
             source_badges = "".join([
@@ -345,8 +353,8 @@ def _handle_question(
 ) -> None:
     """Process a question through the RAG engine."""
 
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
+    # ── Always guarantee list before any append ───────────────────────────────
+    _ensure_chat_list()
 
     # Add user message immediately
     st.session_state.chat_messages.append({
@@ -431,5 +439,8 @@ def _render_suggested_questions(simulation_context: dict = None) -> None:
                 use_container_width=True,
                 help=suggestion,
             ):
-                st.session_state["chat_input"] = suggestion
-                st.rerun()
+                _handle_question(
+                    user_id=get_user_id(),
+                    question=suggestion,
+                    simulation_context=simulation_context,
+                )
