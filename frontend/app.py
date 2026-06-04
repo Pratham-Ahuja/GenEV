@@ -149,11 +149,15 @@ def _init_session_state():
         "last_run_id":   None,
         "preset_prompt": "",
         "prompt_input":  "",
-        "chat_messages": None,
+        "chat_messages": [],    # ← always a list, never None
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
+    # Fix: if chat_messages exists but is None, reset to list
+    if not isinstance(st.session_state.get("chat_messages"), list):
+        st.session_state.chat_messages = []
 
 _init_session_state()
 
@@ -262,7 +266,7 @@ def _render_simulator_tab():
 
     user_id = get_user_id()
 
-    # ── Always fetch fresh limit — never use cache ────────────────────────────
+    # ── Always fetch fresh limit ──────────────────────────────────────────────
     sim_allowed, sim_used, sim_limit = check_simulation_limit(user_id)
 
     if not sim_allowed:
@@ -297,7 +301,7 @@ def _render_simulator_tab():
             help="Random seed for reproducibility",
         )
 
-    # Usage counter display
+    # Usage counter
     if sim_limit < 999:
         color = "#DC2626" if sim_used >= sim_limit else "#64748B"
         st.markdown(
@@ -347,9 +351,8 @@ def _render_simulator_tab():
             st.write("✅ Saved to your personal workspace")
 
             st.write("📈 Step 6 — Updating usage count...")
-            # ── Increment THEN invalidate cache so sidebar refreshes ──────────
             increment_simulation_count(user_id)
-            refresh_profile()   # ← force profile cache refresh in session state
+            refresh_profile()
             st.write("✅ Usage count updated")
 
             status.update(
@@ -358,10 +361,10 @@ def _render_simulator_tab():
             )
 
         st.session_state["preset_prompt"] = ""
-        result["insights"]              = insights
-        st.session_state.last_result    = result
-        st.session_state.last_metrics   = metrics
-        st.session_state.last_run_id    = run_id
+        result["insights"]             = insights
+        st.session_state.last_result   = result
+        st.session_state.last_metrics  = metrics
+        st.session_state.last_run_id   = run_id
         st.rerun()
 
     # ── Results ───────────────────────────────────────────────────────────────
