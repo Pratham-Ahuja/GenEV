@@ -28,10 +28,115 @@ from database.supabase_client import (
 # Session state keys
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SESSION_KEY = "genev_session"
-_USER_KEY    = "genev_user"
-_PROFILE_KEY = "genev_profile"
-_TOKEN_KEY   = "genev_access_token"
+_SESSION_KEY     = "genev_session"
+_USER_KEY        = "genev_user"
+_PROFILE_KEY     = "genev_profile"
+_TOKEN_KEY       = "genev_access_token"
+_COOKIE_PASSWORD = "genev_secret_cookie_key_2025"
+_COOKIE_PREFIX   = "genev_"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cookie manager
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_cookies():
+    """Get the encrypted cookie manager instance."""
+    try:
+        from streamlit_cookies_manager import EncryptedCookieManager
+        cookies = EncryptedCookieManager(
+            prefix=_COOKIE_PREFIX,
+            password=_COOKIE_PASSWORD,
+        )
+        return cookies
+    except ImportError:
+        print("[auth] streamlit-cookies-manager not installed. "
+              "Run: pip install streamlit-cookies-manager")
+        return None
+    except Exception as e:
+        print(f"[auth] Cookie manager init failed: {e}")
+        return None
+
+
+def _save_to_cookie(access_token: str, refresh_token: str) -> None:
+    """Save tokens to browser cookie for persistence."""
+    try:
+        cookies = _get_cookies()
+        if cookies is None:
+            return
+        if not cookies.ready():
+            return
+        cookies["access_token"]  = access_token
+        cookies["refresh_token"] = refresh_token
+        cookies.save()
+    except Exception as e:
+        print(f"[auth] Cookie save failed: {e}")
+
+
+def _clear_cookie() -> None:
+    """Clear auth tokens from browser cookie."""
+    try:
+        cookies = _get_cookies()
+        if cookies is None:
+            return
+        if not cookies.ready():
+            return
+        cookies["access_token"]  = ""
+        cookies["refresh_token"] = ""
+        cookies.save()
+    except Exception as e:
+        print(f"[auth] Cookie clear failed: {e}")
+
+
+def _restore_from_cookie() -> bool:
+    """
+    Try to restore session from browser cookie.
+    Uses refresh_token first (more reliable), then access_token.
+    Returns True if session restored successfully.
+    """
+    try:
+        cookies = _get_cookies()
+        if cookies is None:
+            return False
+        if not cookies.ready():
+            return False
+
+        refresh_token = cookies.get("refresh_token", "")
+        access_token  = cookies.get("access_token", "")
+
+        if not refresh_token and not access_token:
+            return False
+
+        client = get_client()
+
+        # Try refresh token first — most reliable
+        if refresh_token:
+            try:
+                response = client.auth.refresh_session(refresh_token)
+                if response and response.session:
+                    _store_session(response)
+                    return True
+            except Exception:
+                pass
+
+        # Fall back to access token
+        if access_token:
+            try:
+                set_auth_token(access_token)
+                response = client.auth.get_user(access_token)
+                if response and response.user:
+                    st.session_state[_USER_KEY]  = response.user
+                    st.session_state[_TOKEN_KEY] = access_token
+                    profile = get_profile(response.user.id)
+                    st.session_state[_PROFILE_KEY] = profile
+                    return True
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"[auth] Cookie restore failed: {e}")
+
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,7 +172,6 @@ def sign_up(
 
         user_id = response.user.id
 
-        # Create profile in profiles table
         create_profile(
             user_id=user_id,
             name=name,
@@ -78,7 +182,6 @@ def sign_up(
             driving_style=driving_style,
         )
 
-        # Auto sign in after signup
         if response.session:
             _store_session(response)
             return True, "Account created successfully!"
@@ -134,19 +237,24 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sign_out() -> None:
-    """Sign out current user and clear all session state."""
+    """Sign out current user and clear session state + cookies."""
     try:
         client = get_client()
         client.auth.sign_out()
     except Exception:
         pass
 
+    # Clear browser cookie
+    _clear_cookie()
+
+    # Clear session state
     for key in [_SESSION_KEY, _USER_KEY, _PROFILE_KEY, _TOKEN_KEY]:
         if key in st.session_state:
             del st.session_state[key]
 
     for key in ["last_result", "last_metrics", "last_run_id",
-                "preset_prompt", "prompt_input", "chat_messages"]:
+                "preset_prompt", "prompt_input", "chat_messages",
+                "show_auth"]:
         if key in st.session_state:
             del st.session_state[key]
 
@@ -156,45 +264,46 @@ def sign_out() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _store_session(response) -> None:
-    """Store auth session in Streamlit session state."""
+    """Store auth session in Streamlit state and browser cookie."""
     st.session_state[_SESSION_KEY] = response.session
     st.session_state[_USER_KEY]    = response.user
     st.session_state[_TOKEN_KEY]   = response.session.access_token
 
-    # Inject token into Supabase client for RLS
     set_auth_token(response.session.access_token)
 
-    # Always fetch fresh profile on login — never use stale cache
     profile = get_profile(response.user.id)
     st.session_state[_PROFILE_KEY] = profile
+
+    # Persist to cookie for refresh/reopen persistence
+    _save_to_cookie(
+        response.session.access_token,
+        response.session.refresh_token,
+    )
 
 
 def restore_session() -> bool:
     """
-    Attempt to restore session from Streamlit state on page reload.
+    Attempt to restore session.
+    Order: session state token → browser cookie.
     Returns True if session is valid.
     """
+    # 1. Try existing session state token (same tab, no refresh)
     token = st.session_state.get(_TOKEN_KEY)
-    if not token:
-        return False
+    if token:
+        try:
+            set_auth_token(token)
+            client   = get_client()
+            response = client.auth.get_user(token)
+            if response and response.user:
+                st.session_state[_USER_KEY] = response.user
+                profile = get_profile(response.user.id)
+                st.session_state[_PROFILE_KEY] = profile
+                return True
+        except Exception:
+            pass
 
-    try:
-        set_auth_token(token)
-        client  = get_client()
-        response = client.auth.get_user(token)
-
-        if response and response.user:
-            st.session_state[_USER_KEY] = response.user
-            # Always fetch fresh profile on restore
-            profile = get_profile(response.user.id)
-            st.session_state[_PROFILE_KEY] = profile
-            return True
-
-    except Exception:
-        pass
-
-    sign_out()
-    return False
+    # 2. Try browser cookie (after refresh or reopen)
+    return _restore_from_cookie()
 
 
 def is_logged_in() -> bool:
@@ -219,10 +328,7 @@ def get_user_email() -> Optional[str]:
 
 
 def get_profile_cached() -> Optional[dict]:
-    """
-    Get current user's profile.
-    Uses session state cache but always re-fetches after cache invalidation.
-    """
+    """Get profile from cache or fetch fresh from Supabase."""
     profile = st.session_state.get(_PROFILE_KEY)
     if profile:
         return profile
@@ -231,22 +337,16 @@ def get_profile_cached() -> Optional[dict]:
     if not user_id:
         return None
 
-    # Cache miss — fetch fresh from Supabase
     profile = get_profile(user_id)
     st.session_state[_PROFILE_KEY] = profile
     return profile
 
 
 def refresh_profile() -> Optional[dict]:
-    """
-    Force refresh user profile from Supabase.
-    Call this after any profile update to keep UI in sync.
-    """
+    """Force refresh user profile from Supabase."""
     user_id = get_user_id()
     if not user_id:
         return None
-
-    # Always fetch fresh — bypass cache
     profile = get_profile(user_id)
     st.session_state[_PROFILE_KEY] = profile
     return profile
@@ -262,22 +362,14 @@ def get_user_name() -> str:
 
 
 def get_subscription_plan() -> str:
-    """
-    Get current user's subscription plan.
-    Always fetches fresh — never cached — so premium activation
-    reflects immediately without restart.
-    """
+    """Get current user's subscription plan — always fresh."""
     user_id = get_user_id()
     if not user_id:
         return "free"
-
-    # Fetch fresh profile directly — bypass session cache
     profile = get_profile(user_id)
     if profile:
-        # Update cache with fresh data
         st.session_state[_PROFILE_KEY] = profile
         return profile.get("subscription_plan", "free")
-
     return "free"
 
 

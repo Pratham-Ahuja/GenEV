@@ -2,16 +2,6 @@
 frontend/components/ai_chat.py
 
 RAG-powered conversational AI chat UI for GenEV 2.0.
-
-Features
---------
-- ChatGPT-style message interface
-- Simulation context memory
-- Question limit display
-- Source citations from knowledge base
-- Upgrade prompt for free users
-- Chat history from Supabase
-- Clear chat functionality
 """
 
 import re
@@ -49,10 +39,7 @@ def _format_source(source: str) -> str:
 
 
 def _ensure_chat_list() -> None:
-    """
-    Guarantee st.session_state.chat_messages is always a list.
-    Handles None, missing key, and wrong type all in one place.
-    """
+    """Guarantee chat_messages is always a list."""
     if not isinstance(st.session_state.get("chat_messages"), list):
         st.session_state.chat_messages = []
 
@@ -62,25 +49,24 @@ def _ensure_chat_list() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_ai_chat(simulation_context: dict = None) -> None:
-    """
-    Render the full AI chat interface.
-
-    Parameters
-    ----------
-    simulation_context : dict
-        The most recent simulation result + metrics dict.
-        Passed from app.py session state.
-        If None, AI will answer from knowledge base only.
-    """
     user_id = get_user_id()
     if not user_id:
         st.warning("Please log in to use AI Chat.", icon="⚠️")
         return
 
-    # ── Ensure chat list is valid on every render ─────────────────────────────
     _ensure_chat_list()
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    # ── Check if a pending question needs processing ──────────────────────────
+    # This runs BEFORE any widgets are rendered to avoid widget-state conflicts
+    if st.session_state.get("_pending_question"):
+        pending = st.session_state.pop("_pending_question")
+        _process_question(
+            user_id=user_id,
+            question=pending["question"],
+            simulation_context=pending["context"],
+        )
+        return  # rerun() is called inside _process_question
+
     st.markdown("## 🤖 GenEV AI Chat")
     st.markdown(
         "<p style='color:#64748B;font-size:13px;margin-bottom:4px;'>"
@@ -89,7 +75,6 @@ def render_ai_chat(simulation_context: dict = None) -> None:
         unsafe_allow_html=True,
     )
 
-    # ── Simulation context banner ─────────────────────────────────────────────
     if simulation_context:
         label   = simulation_context.get("scenario_label", "Recent simulation")
         overall = simulation_context.get("metrics", {}).get("overall_score", 0)
@@ -113,18 +98,10 @@ def render_ai_chat(simulation_context: dict = None) -> None:
             unsafe_allow_html=True,
         )
 
-    # ── Question limit display ────────────────────────────────────────────────
     _render_question_limit_bar(user_id)
-
     st.divider()
-
-    # ── Chat history ──────────────────────────────────────────────────────────
     _render_chat_history(user_id)
-
-    # ── Input area ────────────────────────────────────────────────────────────
     _render_chat_input(user_id, simulation_context)
-
-    # ── Suggested questions ───────────────────────────────────────────────────
     _render_suggested_questions(simulation_context)
 
 
@@ -133,7 +110,6 @@ def render_ai_chat(simulation_context: dict = None) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _render_question_limit_bar(user_id: str) -> None:
-    """Render question usage progress bar."""
     allowed, used, limit = check_question_limit(user_id)
     premium = is_premium()
 
@@ -184,8 +160,7 @@ def _render_question_limit_bar(user_id: str) -> None:
 
 def _render_chat_history(user_id: str) -> None:
     """Render chat message history."""
-
-    # Load from Supabase only on first render (when list is empty)
+    # Load from Supabase only when list is empty
     if isinstance(st.session_state.get("chat_messages"), list) and \
        len(st.session_state.chat_messages) == 0:
         try:
@@ -208,7 +183,6 @@ def _render_chat_history(user_id: str) -> None:
         except Exception:
             pass
 
-    # Chat container
     with st.container():
         if not st.session_state.chat_messages:
             _render_empty_chat_state()
@@ -216,7 +190,6 @@ def _render_chat_history(user_id: str) -> None:
             for msg in st.session_state.chat_messages:
                 _render_message(msg)
 
-    # Clear chat button
     if st.session_state.chat_messages:
         col1, col2 = st.columns([6, 1])
         with col2:
@@ -235,7 +208,6 @@ def _render_chat_history(user_id: str) -> None:
 
 
 def _render_empty_chat_state() -> None:
-    """Render empty state when no messages exist."""
     st.markdown(
         '<div style="text-align:center;padding:40px 20px;color:#94A3B8;">'
         '<div style="font-size:36px;margin-bottom:12px;">🤖</div>'
@@ -251,7 +223,6 @@ def _render_empty_chat_state() -> None:
 
 
 def _render_message(msg: dict) -> None:
-    """Render a single chat message."""
     role    = msg.get("role", "user")
     content = msg.get("content", "")
     sources = msg.get("sources", [])
@@ -339,24 +310,32 @@ def _render_chat_input(
         )
 
     if send and question.strip():
-        _handle_question(
-            user_id=user_id,
-            question=question.strip(),
-            simulation_context=simulation_context,
-        )
+        # ── Store as pending — widget already rendered so we can't clear it ───
+        # We store it and process on NEXT rerun BEFORE widgets are rendered
+        st.session_state["_pending_question"] = {
+            "question": question.strip(),
+            "context":  simulation_context,
+        }
+        st.rerun()
 
 
-def _handle_question(
+# ─────────────────────────────────────────────────────────────────────────────
+# Core question processor — called BEFORE widgets render
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _process_question(
     user_id: str,
     question: str,
     simulation_context: dict = None,
 ) -> None:
-    """Process a question through the RAG engine."""
-
-    # ── Always guarantee list before any append ───────────────────────────────
+    """
+    Actually process the question and get the AI response.
+    Called at the TOP of render_ai_chat before any widgets are rendered
+    so we never conflict with widget state.
+    """
     _ensure_chat_list()
 
-    # Add user message immediately
+    # Add user message
     st.session_state.chat_messages.append({
         "role":    "user",
         "content": question,
@@ -381,10 +360,6 @@ def _handle_question(
         "content": answer,
         "sources": sources,
     })
-
-    # Clear input field
-    if "chat_input" in st.session_state:
-        st.session_state.chat_input = ""
 
     st.rerun()
 
@@ -439,8 +414,9 @@ def _render_suggested_questions(simulation_context: dict = None) -> None:
                 use_container_width=True,
                 help=suggestion,
             ):
-                _handle_question(
-                    user_id=get_user_id(),
-                    question=suggestion,
-                    simulation_context=simulation_context,
-                )
+                # ── Same pattern — store as pending, process on next rerun ────
+                st.session_state["_pending_question"] = {
+                    "question": suggestion,
+                    "context":  simulation_context,
+                }
+                st.rerun()

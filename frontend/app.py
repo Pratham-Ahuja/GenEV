@@ -74,6 +74,7 @@ from frontend.components.metrics_panel import (
 from frontend.components.ai_chat import render_ai_chat
 from frontend.components.subscription import render_subscription_page
 from frontend.components.about import render_about_page
+from frontend.components.landing import render_landing_page
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -149,13 +150,14 @@ def _init_session_state():
         "last_run_id":   None,
         "preset_prompt": "",
         "prompt_input":  "",
-        "chat_messages": [],    # ← always a list, never None
+        "chat_messages": [],
+        "show_auth":     False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
 
-    # Fix: if chat_messages exists but is None, reset to list
+    # Safety — ensure chat_messages is always a list
     if not isinstance(st.session_state.get("chat_messages"), list):
         st.session_state.chat_messages = []
 
@@ -167,6 +169,7 @@ _init_session_state()
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _check_auth() -> bool:
+    """Returns True if user is authenticated."""
     if is_logged_in():
         return True
     if restore_session():
@@ -265,8 +268,6 @@ def _render_simulator_tab():
     )
 
     user_id = get_user_id()
-
-    # ── Always fetch fresh limit ──────────────────────────────────────────────
     sim_allowed, sim_used, sim_limit = check_simulation_limit(user_id)
 
     if not sim_allowed:
@@ -277,7 +278,6 @@ def _render_simulator_tab():
             icon="⚠️",
         )
 
-    # ── Prompt input ──────────────────────────────────────────────────────────
     prompt = st.text_area(
         label="Scenario Prompt",
         value=st.session_state["preset_prompt"],
@@ -301,7 +301,6 @@ def _render_simulator_tab():
             help="Random seed for reproducibility",
         )
 
-    # Usage counter
     if sim_limit < 999:
         color = "#DC2626" if sim_used >= sim_limit else "#64748B"
         st.markdown(
@@ -310,7 +309,6 @@ def _render_simulator_tab():
             unsafe_allow_html=True,
         )
 
-    # ── Run pipeline ──────────────────────────────────────────────────────────
     if run_clicked and sim_allowed:
         actual_prompt = st.session_state.get("prompt_input", "").strip()
 
@@ -367,7 +365,6 @@ def _render_simulator_tab():
         st.session_state.last_run_id   = run_id
         st.rerun()
 
-    # ── Results ───────────────────────────────────────────────────────────────
     if st.session_state.last_result is None:
         _render_empty_state()
         return
@@ -701,15 +698,27 @@ def _render_comparison_tab():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    # ── Auth gate ─────────────────────────────────────────────────────────────
-    if not _check_auth():
-        render_auth_page()
+
+    # ── Step 1: Try to restore session from cookie first ─────────────────────
+    authenticated = _check_auth()
+
+    # ── Step 2: Routing logic ─────────────────────────────────────────────────
+    if not authenticated:
+        if st.session_state.get("show_auth", False):
+            # User clicked "Get Started" on landing — show login/signup
+            render_auth_page()
+        else:
+            # Default: show landing page
+            render_landing_page()
         return
 
-    # ── Authenticated layout ──────────────────────────────────────────────────
+    # ── Step 3: Logged in — clear show_auth flag ──────────────────────────────
+    if "show_auth" in st.session_state:
+        del st.session_state["show_auth"]
+
+    # ── Step 4: Full authenticated dashboard ──────────────────────────────────
     _render_sidebar()
 
-    # Build simulation context for AI chat
     sim_context = None
     if st.session_state.last_result and st.session_state.last_metrics:
         sim_context = {
