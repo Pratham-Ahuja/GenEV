@@ -34,7 +34,11 @@ from auth.auth_handler import (
     is_premium,
     sign_out,
 )
-from auth.auth_ui import render_auth_page, render_user_sidebar
+from auth.auth_ui import (
+    render_auth_page,
+    render_user_sidebar,
+    render_reset_password_page,
+)
 from database.supabase_client import (
     save_simulation_run,
     get_all_simulation_runs,
@@ -145,23 +149,55 @@ st.markdown("""
 
 def _init_session_state():
     defaults = {
-        "last_result":   None,
-        "last_metrics":  None,
-        "last_run_id":   None,
-        "preset_prompt": "",
-        "prompt_input":  "",
-        "chat_messages": [],
-        "show_auth":     False,
+        "last_result":    None,
+        "last_metrics":   None,
+        "last_run_id":    None,
+        "preset_prompt":  "",
+        "prompt_input":   "",
+        "chat_messages":  [],
+        "show_auth":      False,
+        "recovery_token": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
 
-    # Safety — ensure chat_messages is always a list
     if not isinstance(st.session_state.get("chat_messages"), list):
         st.session_state.chat_messages = []
 
 _init_session_state()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Recovery token detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_recovery_token() -> str | None:
+    """
+    Detect if the URL contains a Supabase password recovery token.
+    Supabase appends #access_token=...&type=recovery to the URL.
+    We read it from st.query_params and store in session state.
+    """
+    # Check session state first (persists across reruns)
+    if st.session_state.get("recovery_token"):
+        return st.session_state["recovery_token"]
+
+    # Check query params — Streamlit exposes hash fragments as query params
+    # on some versions. Try both approaches.
+    try:
+        params = st.query_params
+        token_type = params.get("type", "")
+        access_token = params.get("access_token", "")
+
+        if token_type == "recovery" and access_token:
+            st.session_state["recovery_token"] = access_token
+            # Clear from URL
+            st.query_params.clear()
+            return access_token
+    except Exception:
+        pass
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,7 +234,6 @@ def _render_sidebar():
         render_user_sidebar()
         st.divider()
 
-        # Quick presets
         st.markdown("**⚡ Quick Presets**")
         presets = {
             "🌡️ Delhi Summer":    "Simulate an EV driving in extreme Delhi summer traffic with repeated fast charging.",
@@ -216,7 +251,6 @@ def _render_sidebar():
 
         st.divider()
 
-        # Recent runs
         st.markdown("**📜 Recent Runs**")
         user_id = get_user_id()
         if user_id:
@@ -699,24 +733,28 @@ def _render_comparison_tab():
 
 def main():
 
-    # ── Step 1: Try to restore session from cookie first ─────────────────────
+    # ── Step 1: Check for password recovery token in URL ──────────────────────
+    recovery_token = _check_recovery_token()
+    if recovery_token:
+        render_reset_password_page(recovery_token)
+        return
+
+    # ── Step 2: Try to restore session ────────────────────────────────────────
     authenticated = _check_auth()
 
-    # ── Step 2: Routing logic ─────────────────────────────────────────────────
+    # ── Step 3: Routing logic ─────────────────────────────────────────────────
     if not authenticated:
         if st.session_state.get("show_auth", False):
-            # User clicked "Get Started" on landing — show login/signup
             render_auth_page()
         else:
-            # Default: show landing page
             render_landing_page()
         return
 
-    # ── Step 3: Logged in — clear show_auth flag ──────────────────────────────
+    # ── Step 4: Logged in — clear show_auth flag ──────────────────────────────
     if "show_auth" in st.session_state:
         del st.session_state["show_auth"]
 
-    # ── Step 4: Full authenticated dashboard ──────────────────────────────────
+    # ── Step 5: Full authenticated dashboard ──────────────────────────────────
     _render_sidebar()
 
     sim_context = None

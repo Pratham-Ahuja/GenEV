@@ -5,11 +5,12 @@ Complete authentication UI for GenEV 2.0.
 
 Sections
 --------
-1. render_auth_page()      — main entry point (login or signup)
-2. render_login_form()     — email/password login
-3. render_signup_form()    — new account creation with profile setup
-4. render_profile_editor() — edit profile settings
-5. render_user_sidebar()   — sidebar user info + logout
+1. render_auth_page()         — main entry point (login or signup)
+2. render_login_form()        — email/password login
+3. render_signup_form()       — new account creation with profile setup
+4. render_reset_password_page() — set new password after clicking reset link
+5. render_profile_editor()    — edit profile settings
+6. render_user_sidebar()      — sidebar user info + logout
 """
 
 import streamlit as st
@@ -112,6 +113,105 @@ def render_auth_page() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Password reset page — shown when user clicks reset link from email
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_reset_password_page(access_token: str) -> None:
+    """
+    Render the set new password form.
+    Called from app.py when URL contains access_token + type=recovery.
+    """
+    st.markdown(
+        '<div style="text-align:center;padding:24px 20px 16px;">'
+        '<div style="font-size:56px;margin-bottom:8px;">⚡</div>'
+        '<div style="font-size:36px;font-weight:800;color:#1D9E75;'
+        'margin-bottom:8px;">GenEV</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### 🔐 Set New Password")
+    st.markdown(
+        "<p style='color:#64748B;font-size:13px;margin-bottom:20px;'>"
+        "Enter your new password below.</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form("reset_password_form"):
+        new_password = st.text_input(
+            "New Password",
+            type="password",
+            placeholder="Min 6 characters",
+            key="reset_new_password",
+        )
+        confirm_password = st.text_input(
+            "Confirm New Password",
+            type="password",
+            placeholder="Repeat new password",
+            key="reset_confirm_password",
+        )
+
+        col_btn, col_space = st.columns([1, 2])
+        with col_btn:
+            submitted = st.form_submit_button(
+                "Update Password →",
+                use_container_width=True,
+            )
+
+    if submitted:
+        if not new_password or not confirm_password:
+            st.error("Please fill in both fields.", icon="⚠️")
+            return
+
+        if new_password != confirm_password:
+            st.error("Passwords do not match.", icon="⚠️")
+            return
+
+        if len(new_password) < 6:
+            st.error("Password must be at least 6 characters.", icon="⚠️")
+            return
+
+        with st.spinner("Updating password..."):
+            success, message = _update_password(access_token, new_password)
+
+        if success:
+            st.success(message, icon="✅")
+            st.markdown(
+                '<p style="font-size:13px;color:#64748B;margin-top:8px;">'
+                'Your password has been updated. You can now log in with your new password.'
+                '</p>',
+                unsafe_allow_html=True,
+            )
+            # Clear recovery token from session
+            if "recovery_token" in st.session_state:
+                del st.session_state["recovery_token"]
+
+            import time
+            time.sleep(2)
+            st.rerun()
+        else:
+            st.error(message, icon="🔴")
+
+
+def _update_password(access_token: str, new_password: str) -> tuple[bool, str]:
+    """Update user password using the recovery access token."""
+    try:
+        from database.supabase_client import get_client, set_auth_token
+        client = get_client()
+
+        # Set the recovery token so Supabase knows which user
+        set_auth_token(access_token)
+
+        # Update the password
+        client.auth.update_user({"password": new_password})
+
+        return True, "Password updated successfully!"
+
+    except Exception as e:
+        return False, f"Could not update password: {str(e)}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Login form
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -180,7 +280,6 @@ def render_signup_form() -> None:
 
     with st.form("signup_form", clear_on_submit=False):
 
-        # Account details
         st.markdown("**Account Details**")
         col1, col2 = st.columns(2)
         with col1:
@@ -214,7 +313,6 @@ def render_signup_form() -> None:
 
         st.divider()
 
-        # EV Profile setup
         st.markdown("**Your EV Profile**")
         st.markdown(
             "<p style='color:#64748B;font-size:12px;margin-bottom:12px;'>"
@@ -254,7 +352,6 @@ def render_signup_form() -> None:
                 key="signup_charging",
             )
 
-        # ── Terms agreement ───────────────────────────────────────────────────
         st.markdown("<br>", unsafe_allow_html=True)
         agree = st.checkbox(
             "I hereby declare that I have read and agree to all the terms "
