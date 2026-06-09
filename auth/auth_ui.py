@@ -5,11 +5,11 @@ Complete authentication UI for GenEV 2.0.
 
 Sections
 --------
-1. render_auth_page()     — main entry point (login or signup)
-2. render_login_form()    — email/password login
-3. render_signup_form()   — new account creation with profile setup
-4. render_profile_editor()— edit profile settings
-5. render_user_sidebar()  — sidebar user info + logout
+1. render_auth_page()      — main entry point (login or signup)
+2. render_login_form()     — email/password login
+3. render_signup_form()    — new account creation with profile setup
+4. render_profile_editor() — edit profile settings
+5. render_user_sidebar()   — sidebar user info + logout
 """
 
 import streamlit as st
@@ -22,9 +22,9 @@ from auth.auth_handler import (
     get_profile_cached,
     refresh_profile,
     is_premium,
+    get_user_id,
 )
 from database.supabase_client import update_profile, get_profile
-from auth.auth_handler import get_user_id
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -37,36 +37,44 @@ def render_auth_page() -> None:
     Shows login or signup form based on user selection.
     Called from app.py when user is not logged in.
     """
-    # Hero section
-    st.markdown("""
-    <div style="text-align:center; padding:40px 20px 20px;">
-        <div style="font-size:56px; margin-bottom:8px;">⚡</div>
-        <div style="font-size:36px; font-weight:800; color:#1D9E75;
-                    letter-spacing:0.02em; margin-bottom:8px;">
-            GenEV
-        </div>
-        <div style="font-size:16px; color:#475569; margin-bottom:4px;">
-            AI-Powered EV Ownership Intelligence Platform
-        </div>
-        <div style="font-size:13px; color:#94A3B8;">
-            Simulate · Analyse · Ask AI · Own Smarter
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
-    # Feature highlights
+    # ── Back button to landing page ───────────────────────────────────────────
+    col_back, col_space = st.columns([1, 5])
+    with col_back:
+        if st.button("← Back", key="auth_back_btn", use_container_width=True):
+            st.session_state["show_auth"] = False
+            st.rerun()
+
+    # ── Hero section ──────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="text-align:center;padding:24px 20px 16px;">'
+        '<div style="font-size:56px;margin-bottom:8px;">⚡</div>'
+        '<div style="font-size:36px;font-weight:800;color:#1D9E75;'
+        'letter-spacing:0.02em;margin-bottom:8px;">GenEV</div>'
+        '<div style="font-size:16px;color:#475569;margin-bottom:4px;">'
+        'AI-Powered EV Ownership Intelligence Platform'
+        '</div>'
+        '<div style="font-size:13px;color:#94A3B8;">'
+        'Simulate · Analyse · Ask AI · Own Smarter'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Feature highlights ────────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
     features = [
-        ("🧪", "EV Simulation",      "Realistic scenario generation"),
-        ("🤖", "AI Chat",            "Ask questions about your EV"),
-        ("📊", "Smart Metrics",      "6 performance metrics"),
-        ("📄", "PDF Reports",        "Export your analysis"),
+        ("🧪", "EV Simulation",  "Realistic scenario generation"),
+        ("🤖", "AI Chat",        "Ask questions about your EV"),
+        ("📊", "Smart Metrics",  "6 performance metrics"),
+        ("📄", "PDF Reports",    "Export your analysis"),
     ]
     for col, (icon, title, desc) in zip([col1, col2, col3, col4], features):
         with col:
             st.markdown(
                 f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
-                f'border-radius:12px;padding:16px;text-align:center;margin-bottom:20px;">'
+                f'border-radius:12px;padding:16px;text-align:center;'
+                f'margin-bottom:20px;">'
                 f'<div style="font-size:24px;margin-bottom:6px;">{icon}</div>'
                 f'<div style="font-size:13px;font-weight:600;color:#1E293B;'
                 f'margin-bottom:4px;">{title}</div>'
@@ -77,8 +85,12 @@ def render_auth_page() -> None:
 
     st.divider()
 
-    # Auth tabs
-    tab_login, tab_signup = st.tabs(["🔑 Login", "✨ Create Account"])
+    # ── Auth tabs ─────────────────────────────────────────────────────────────
+    tab_login, tab_signup, tab_forgot = st.tabs([
+        "🔑 Login",
+        "✨ Create Account",
+        "🔓 Forgot Password",
+    ])
 
     with tab_login:
         render_login_form()
@@ -86,13 +98,17 @@ def render_auth_page() -> None:
     with tab_signup:
         render_signup_form()
 
-    # Footer
-    st.markdown("""
-    <div style="text-align:center; padding:20px; color:#94A3B8; font-size:11px;">
-        Built by <strong style="color:#1D9E75;">Pratham Ahuja</strong> ·
-        GenEV v2.0 · AI-Powered EV Intelligence
-    </div>
-    """, unsafe_allow_html=True)
+    with tab_forgot:
+        render_forgot_password_form()
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="text-align:center;padding:20px;color:#94A3B8;font-size:11px;">'
+        'Built by <strong style="color:#1D9E75;">Pratham Ahuja</strong> · '
+        'GenEV v2.0 · AI-Powered EV Intelligence'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,6 +157,12 @@ def render_login_form() -> None:
             st.rerun()
         else:
             st.error(message, icon="🔴")
+
+    st.markdown(
+        '<p style="font-size:12px;color:#94A3B8;margin-top:8px;">'
+        'Forgot your password? Use the <strong>Forgot Password</strong> tab above.</p>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -232,16 +254,31 @@ def render_signup_form() -> None:
                 key="signup_charging",
             )
 
-        st.markdown("")
+        # ── Terms agreement ───────────────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        agree = st.checkbox(
+            "I hereby declare that I have read and agree to all the terms "
+            "and conditions as well as the privacy policy given on the "
+            "Introduction page.",
+            key="signup_agree",
+        )
+
         submitted = st.form_submit_button(
             "Create Account →",
             use_container_width=True,
         )
 
     if submitted:
-        # Validation
         if not all([name, email, password, confirm_password]):
             st.error("Please fill in all required fields.", icon="⚠️")
+            return
+
+        if not agree:
+            st.error(
+                "Please confirm that you have read and agree to the terms "
+                "and conditions as well as the privacy policy to continue.",
+                icon="⚠️",
+            )
             return
 
         if password != confirm_password:
@@ -272,6 +309,84 @@ def render_signup_form() -> None:
             st.rerun()
         else:
             st.error(message, icon="🔴")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Forgot password form
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_forgot_password_form() -> None:
+    """Render forgot password form."""
+    st.markdown("### Reset your password")
+    st.markdown(
+        "<p style='color:#64748B;font-size:13px;margin-bottom:20px;'>"
+        "Enter your registered email address and we'll send you a "
+        "password reset link.</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form("forgot_password_form", clear_on_submit=True):
+        email = st.text_input(
+            "Registered Email Address",
+            placeholder="you@example.com",
+            key="forgot_email",
+        )
+
+        col_btn, col_space = st.columns([1, 2])
+        with col_btn:
+            submitted = st.form_submit_button(
+                "Send Reset Link →",
+                use_container_width=True,
+            )
+
+    if submitted:
+        if not email or "@" not in email:
+            st.error("Please enter a valid email address.", icon="⚠️")
+            return
+
+        with st.spinner("Sending reset link..."):
+            success, message = _send_password_reset(email.strip())
+
+        if success:
+            st.success(message, icon="✅")
+        else:
+            st.error(message, icon="🔴")
+
+    st.markdown(
+        '<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
+        'border-radius:10px;padding:12px 16px;margin-top:16px;">'
+        '<div style="font-size:12px;color:#475569;line-height:1.7;">'
+        '<strong>ℹ️ How it works:</strong><br>'
+        '1. Enter your registered email address above<br>'
+        '2. Check your inbox for a password reset email from GenEV<br>'
+        '3. Click the link in the email to set a new password<br>'
+        '4. Return here and log in with your new password'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _send_password_reset(email: str) -> tuple[bool, str]:
+    """Send a password reset email via Supabase Auth."""
+    try:
+        from database.supabase_client import get_client
+        client = get_client()
+        client.auth.reset_password_email(email)
+        return (
+            True,
+            f"Password reset link sent to {email}. "
+            "Please check your inbox (and spam folder)."
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower() or "user" in error_msg.lower():
+            return (
+                True,
+                f"If {email} is registered with GenEV, "
+                "a reset link has been sent. Please check your inbox."
+            )
+        return False, f"Could not send reset email: {error_msg}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,7 +434,10 @@ def render_profile_editor() -> None:
         with col4:
             style_options = ["eco", "moderate", "aggressive"]
             current_style = profile.get("driving_style", "moderate")
-            style_idx = style_options.index(current_style) if current_style in style_options else 1
+            style_idx     = (
+                style_options.index(current_style)
+                if current_style in style_options else 1
+            )
             driving_style = st.selectbox(
                 "Driving Style",
                 options=style_options,
@@ -336,11 +454,11 @@ def render_profile_editor() -> None:
 
     if saved:
         updates = {
-            "name":               name.strip(),
-            "city":               city.strip(),
-            "daily_commute_km":   float(commute),
-            "driving_style":      driving_style,
-            "has_home_charging":  (home_charging == "Yes"),
+            "name":              name.strip(),
+            "city":              city.strip(),
+            "daily_commute_km":  float(commute),
+            "driving_style":     driving_style,
+            "has_home_charging": (home_charging == "Yes"),
         }
         with st.spinner("Saving..."):
             update_profile(user_id, updates)
@@ -359,10 +477,9 @@ def render_user_sidebar() -> None:
     email   = get_user_email()
     plan    = profile.get("subscription_plan", "free") if profile else "free"
 
-    # Plan badge
     plan_color = "#1D9E75" if plan == "free" else "#7C3AED"
     plan_bg    = "#E1F5EE" if plan == "free" else "#EDE9FE"
-    plan_label = "Free" if plan == "free" else "Premium ⭐"
+    plan_label = "Free"    if plan == "free" else "Premium ⭐"
 
     st.markdown(
         f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
@@ -378,27 +495,28 @@ def render_user_sidebar() -> None:
         unsafe_allow_html=True,
     )
 
-    # Usage stats
     if profile:
-        sims_used  = profile.get("simulations_used_today", 0)
-        qs_used    = profile.get("questions_used_today", 0)
+        sims_used  = profile.get("simulations_used_today", 0) or 0
+        qs_used    = profile.get("questions_used_today", 0)   or 0
         sims_limit = 999 if plan == "premium" else 3
         qs_limit   = 10  if plan == "premium" else 1
+
+        sims_color = "#DC2626" if sims_used >= sims_limit else "#1E293B"
+        qs_color   = "#DC2626" if qs_used   >= qs_limit   else "#1E293B"
 
         st.markdown(
             f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
             f'border-radius:12px;padding:12px 16px;margin-bottom:12px;">'
             f'<div style="font-size:11px;color:#64748B;margin-bottom:8px;">'
             f'📊 Today\'s Usage</div>'
-            f'<div style="font-size:12px;color:#1E293B;margin-bottom:4px;">'
+            f'<div style="font-size:12px;color:{sims_color};margin-bottom:4px;">'
             f'Simulations: <strong>{sims_used}/{sims_limit}</strong></div>'
-            f'<div style="font-size:12px;color:#1E293B;">'
+            f'<div style="font-size:12px;color:{qs_color};">'
             f'AI Questions: <strong>{qs_used}/{qs_limit}</strong></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
 
-    # Logout button
     if st.button("🚪 Sign Out", use_container_width=True, key="logout_btn"):
         sign_out()
         st.rerun()
