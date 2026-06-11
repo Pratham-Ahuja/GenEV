@@ -5,14 +5,15 @@ Complete authentication UI for GenEV 2.0.
 
 Sections
 --------
-1. render_auth_page()         — main entry point (login or signup)
-2. render_login_form()        — email/password login
-3. render_signup_form()       — new account creation with profile setup
+1. render_auth_page()           — main entry point (login or signup)
+2. render_login_form()          — email/password login
+3. render_signup_form()         — new account creation with profile setup
 4. render_reset_password_page() — set new password after clicking reset link
-5. render_profile_editor()    — edit profile settings
-6. render_user_sidebar()      — sidebar user info + logout
+5. render_profile_editor()      — edit profile settings
+6. render_user_sidebar()        — sidebar user info + logout
 """
 
+import time
 import streamlit as st
 from auth.auth_handler import (
     sign_in,
@@ -120,12 +121,14 @@ def render_reset_password_page(access_token: str) -> None:
     """
     Render the set new password form.
     Called from app.py when URL contains access_token + type=recovery.
+    After success, redirects to login page.
     """
     st.markdown(
         '<div style="text-align:center;padding:24px 20px 16px;">'
         '<div style="font-size:56px;margin-bottom:8px;">⚡</div>'
         '<div style="font-size:36px;font-weight:800;color:#1D9E75;'
         'margin-bottom:8px;">GenEV</div>'
+        '<div style="font-size:13px;color:#94A3B8;">Reset Your Password</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -175,18 +178,18 @@ def render_reset_password_page(access_token: str) -> None:
             success, message = _update_password(access_token, new_password)
 
         if success:
-            st.success(message, icon="✅")
-            st.markdown(
-                '<p style="font-size:13px;color:#64748B;margin-top:8px;">'
-                'Your password has been updated. You can now log in with your new password.'
-                '</p>',
-                unsafe_allow_html=True,
+            st.success(
+                "✅ Password updated successfully! Redirecting to login...",
+                icon="✅",
             )
-            # Clear recovery token from session
+
+            # Clear recovery token from session state
             if "recovery_token" in st.session_state:
                 del st.session_state["recovery_token"]
 
-            import time
+            # Set show_auth so app.py routes to login page
+            st.session_state["show_auth"] = True
+
             time.sleep(2)
             st.rerun()
         else:

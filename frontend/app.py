@@ -22,6 +22,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from config import APP_TITLE, APP_VERSION
 from auth.auth_handler import (
@@ -169,35 +170,75 @@ _init_session_state()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Recovery token detection
+# JS Hash Reader — converts Supabase URL hash to query params
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_recovery_token() -> str | None:
+def _inject_hash_reader():
     """
-    Detect if the URL contains a Supabase password recovery token.
-    Supabase appends #access_token=...&type=recovery to the URL.
-    We read it from st.query_params and store in session state.
-    """
-    # Check session state first (persists across reruns)
-    if st.session_state.get("recovery_token"):
-        return st.session_state["recovery_token"]
+    Inject JavaScript that reads the URL hash fragment and converts
+    access_token + type (recovery or signup) into query params
+    that Streamlit can read server-side.
 
-    # Check query params — Streamlit exposes hash fragments as query params
-    # on some versions. Try both approaches.
+    Handles both:
+    - type=recovery  → password reset
+    - type=signup    → email confirmation
+    """
+    components.html("""
+        <script>
+        (function() {
+            const hash = window.location.hash;
+            if (!hash || hash.length < 2) return;
+
+            const params = new URLSearchParams(hash.substring(1));
+            const access_token = params.get('access_token');
+            const token_type   = params.get('type');
+
+            // Only process recovery and signup tokens
+            if (access_token && (token_type === 'recovery' || token_type === 'signup')) {
+                const newUrl = window.location.pathname
+                    + '?access_token=' + encodeURIComponent(access_token)
+                    + '&type=' + encodeURIComponent(token_type);
+                // Replace current URL so hash is gone and query params are visible
+                window.location.replace(newUrl);
+            }
+        })();
+        </script>
+    """, height=0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Token detection from query params
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_recovery_token() -> tuple[str | None, str | None]:
+    """
+    Detect if the URL contains a Supabase token in query params.
+    Returns (access_token, token_type) or (None, None).
+
+    token_type can be:
+    - 'recovery' → password reset
+    - 'signup'   → email confirmation
+    """
+    # Check session state first
+    if st.session_state.get("recovery_token"):
+        return st.session_state["recovery_token"], "recovery"
+
     try:
-        params = st.query_params
-        token_type = params.get("type", "")
+        params       = st.query_params
+        token_type   = params.get("type", "")
         access_token = params.get("access_token", "")
 
-        if token_type == "recovery" and access_token:
-            st.session_state["recovery_token"] = access_token
+        if access_token and token_type in ("recovery", "signup"):
+            if token_type == "recovery":
+                st.session_state["recovery_token"] = access_token
             # Clear from URL
             st.query_params.clear()
-            return access_token
+            return access_token, token_type
+
     except Exception:
         pass
 
-    return None
+    return None, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -733,10 +774,27 @@ def _render_comparison_tab():
 
 def main():
 
-    # ── Step 1: Check for password recovery token in URL ──────────────────────
-    recovery_token = _check_recovery_token()
-    if recovery_token:
-        render_reset_password_page(recovery_token)
+    # ── Step 0: Inject JS hash reader — must be FIRST ─────────────────────────
+    # This converts Supabase URL hash fragments to query params
+    # Handles both password reset (recovery) and email confirmation (signup)
+    _inject_hash_reader()
+
+    # ── Step 1: Check for Supabase token in query params ──────────────────────
+    access_token, token_type = _check_recovery_token()
+
+    if access_token and token_type == "recovery":
+        # Show password reset form
+        render_reset_password_page(access_token)
+        return
+
+    if access_token and token_type == "signup":
+        # Auto-confirm and redirect to login
+        st.session_state["show_auth"] = True
+        st.success(
+            "✅ Email confirmed! You can now log in.",
+            icon="✅",
+        )
+        render_auth_page()
         return
 
     # ── Step 2: Try to restore session ────────────────────────────────────────
