@@ -783,6 +783,14 @@ def main():
     access_token, token_type = _check_recovery_token()
 
     if access_token and token_type == "recovery":
+        # DEBUG — temporary, remove after diagnosing token issue
+        st.code(
+            f"Token length: {len(access_token)}\n"
+            f"Dots count: {access_token.count('.')}\n"
+            f"First 50 chars: {access_token[:50]}\n"
+            f"Last 30 chars: {access_token[-30:]}"
+        )
+        st.stop()
         # Show password reset form
         render_reset_password_page(access_token)
         return
