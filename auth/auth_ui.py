@@ -197,20 +197,39 @@ def render_reset_password_page(access_token: str) -> None:
 
 
 def _update_password(access_token: str, new_password: str) -> tuple[bool, str]:
-    """Update user password using the recovery access token."""
+    """
+    Update user password using the recovery access token.
+
+    Calls the Supabase Auth REST API directly with the recovery token —
+    this is the intended use of a recovery token and avoids SDK session
+    management issues entirely.
+    """
     try:
-        from database.supabase_client import get_client
-        client = get_client()
+        import httpx
+        from config import SUPABASE_URL, SUPABASE_ANON_KEY
 
-        # Set the session using the recovery access token.
-        # Supabase recovery tokens can be used as both access_token
-        # and refresh_token to establish an active session.
-        client.auth.set_session(access_token, access_token)
+        resp = httpx.put(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={"password": new_password},
+            timeout=15.0,
+        )
 
-        # Now update the password — session is active
-        client.auth.update_user({"password": new_password})
+        if resp.status_code == 200:
+            return True, "Password updated successfully!"
 
-        return True, "Password updated successfully!"
+        # Try to extract a useful error message
+        try:
+            err_data = resp.json()
+            err_msg  = err_data.get("msg") or err_data.get("error_description") or err_data.get("error") or resp.text
+        except Exception:
+            err_msg = resp.text
+
+        return False, f"Could not update password: {err_msg}"
 
     except Exception as e:
         return False, f"Could not update password: {str(e)}"
