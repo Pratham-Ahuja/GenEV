@@ -199,13 +199,15 @@ def render_reset_password_page(access_token: str) -> None:
 def _update_password(access_token: str, new_password: str) -> tuple[bool, str]:
     """Update user password using the recovery access token."""
     try:
-        from database.supabase_client import get_client, set_auth_token
+        from database.supabase_client import get_client
         client = get_client()
 
-        # Set the recovery token so Supabase knows which user
-        set_auth_token(access_token)
+        # Set the session using the recovery access token.
+        # Supabase recovery tokens can be used as both access_token
+        # and refresh_token to establish an active session.
+        client.auth.set_session(access_token, access_token)
 
-        # Update the password
+        # Now update the password — session is active
         client.auth.update_user({"password": new_password})
 
         return True, "Password updated successfully!"
