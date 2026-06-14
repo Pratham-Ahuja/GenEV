@@ -117,10 +117,10 @@ def render_auth_page() -> None:
 # Password reset page — shown when user clicks reset link from email
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_reset_password_page(access_token: str) -> None:
+def render_reset_password_page(token_hash: str) -> None:
     """
     Render the set new password form.
-    Called from app.py when URL contains access_token + type=recovery.
+    Called from app.py when URL contains token_hash + type=recovery.
     After success, redirects to login page.
     """
     st.markdown(
@@ -175,45 +175,57 @@ def render_reset_password_page(access_token: str) -> None:
             return
 
         with st.spinner("Updating password..."):
-            success, message = _update_password(access_token, new_password)
+            success, message = _update_password(token_hash, new_password)
 
         if success:
             st.success(
                 "✅ Password updated successfully! Redirecting to login...",
                 icon="✅",
             )
-
-            # Clear recovery token from session state
             if "recovery_token" in st.session_state:
                 del st.session_state["recovery_token"]
-
-            # Set show_auth so app.py routes to login page
             st.session_state["show_auth"] = True
-
             time.sleep(2)
             st.rerun()
         else:
             st.error(message, icon="🔴")
 
 
-def _update_password(access_token: str, new_password: str) -> tuple[bool, str]:
+def _update_password(token_hash: str, new_password: str) -> tuple[bool, str]:
     """
-    Update user password using the recovery access token.
+    Update user password using the token_hash from the reset email.
 
-    Calls the Supabase Auth REST API directly with the recovery token —
-    this is the intended use of a recovery token and avoids SDK session
-    management issues entirely.
+    Flow:
+    1. Call verify_otp with token_hash + type=recovery to get an active session
+    2. Use that session's access_token to update the password via REST API
     """
     try:
+        from database.supabase_client import get_client
         import httpx
         from config import SUPABASE_URL, SUPABASE_ANON_KEY
 
+        client = get_client()
+
+        # Step 1: Exchange token_hash for an active session
+        response = client.auth.verify_otp({
+            "token_hash": token_hash,
+            "type":       "recovery",
+        })
+
+        # Step 2: Get the access token from the session
+        session = response.session
+        if not session or not session.access_token:
+            return False, "Could not verify reset token. Please request a new reset link."
+
+        access_token = session.access_token
+
+        # Step 3: Update password using the active session's access token
         resp = httpx.put(
             f"{SUPABASE_URL}/auth/v1/user",
             headers={
-                "apikey": SUPABASE_ANON_KEY,
+                "apikey":        SUPABASE_ANON_KEY,
                 "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
+                "Content-Type":  "application/json",
             },
             json={"password": new_password},
             timeout=15.0,
@@ -222,10 +234,14 @@ def _update_password(access_token: str, new_password: str) -> tuple[bool, str]:
         if resp.status_code == 200:
             return True, "Password updated successfully!"
 
-        # Try to extract a useful error message
         try:
             err_data = resp.json()
-            err_msg  = err_data.get("msg") or err_data.get("error_description") or err_data.get("error") or resp.text
+            err_msg  = (
+                err_data.get("msg")
+                or err_data.get("error_description")
+                or err_data.get("error")
+                or resp.text
+            )
         except Exception:
             err_msg = resp.text
 
