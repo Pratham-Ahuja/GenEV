@@ -442,8 +442,19 @@ def render_signup_form() -> None:
             )
 
         if success:
-            st.success(message, icon="✅")
-            st.rerun()
+            # ── Email confirmation is ON — tell user to check inbox ───────────
+            st.success(
+                "✅ Account created! Please check your email and click "
+                "the verification link to activate your account.",
+                icon="✅",
+            )
+            st.info(
+                "📧 A verification email has been sent to "
+                f"**{email.strip()}**. "
+                "Click the link in the email to activate your account, "
+                "then return here to log in.",
+                icon="📬",
+            )
         else:
             st.error(message, icon="🔴")
 
