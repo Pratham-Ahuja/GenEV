@@ -849,7 +849,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()"""
+    main()
+
+"""
 frontend/app.py — Main GenEV 2.0 Streamlit application.
 
 Tabs
