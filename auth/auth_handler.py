@@ -18,6 +18,7 @@ from typing import Optional
 
 from database.supabase_client import (
     get_client,
+    get_service_client,
     set_auth_token,
     create_profile,
     get_profile,
@@ -50,8 +51,7 @@ def _get_cookies():
         )
         return cookies
     except ImportError:
-        print("[auth] streamlit-cookies-manager not installed. "
-              "Run: pip install streamlit-cookies-manager")
+        print("[auth] streamlit-cookies-manager not installed.")
         return None
     except Exception as e:
         print(f"[auth] Cookie manager init failed: {e}")
@@ -62,9 +62,7 @@ def _save_to_cookie(access_token: str, refresh_token: str) -> None:
     """Save tokens to browser cookie for persistence."""
     try:
         cookies = _get_cookies()
-        if cookies is None:
-            return
-        if not cookies.ready():
+        if cookies is None or not cookies.ready():
             return
         cookies["access_token"]  = access_token
         cookies["refresh_token"] = refresh_token
@@ -77,9 +75,7 @@ def _clear_cookie() -> None:
     """Clear auth tokens from browser cookie."""
     try:
         cookies = _get_cookies()
-        if cookies is None:
-            return
-        if not cookies.ready():
+        if cookies is None or not cookies.ready():
             return
         cookies["access_token"]  = ""
         cookies["refresh_token"] = ""
@@ -89,27 +85,20 @@ def _clear_cookie() -> None:
 
 
 def _restore_from_cookie() -> bool:
-    """
-    Try to restore session from browser cookie.
-    Uses refresh_token first (more reliable), then access_token.
-    Returns True if session restored successfully.
-    """
+    """Try to restore session from browser cookie."""
     try:
         cookies = _get_cookies()
-        if cookies is None:
-            return False
-        if not cookies.ready():
+        if cookies is None or not cookies.ready():
             return False
 
         refresh_token = cookies.get("refresh_token", "")
-        access_token  = cookies.get("access_token", "")
+        access_token  = cookies.get("access_token",  "")
 
         if not refresh_token and not access_token:
             return False
 
         client = get_client()
 
-        # Try refresh token first — most reliable
         if refresh_token:
             try:
                 response = client.auth.refresh_session(refresh_token)
@@ -119,14 +108,13 @@ def _restore_from_cookie() -> bool:
             except Exception:
                 pass
 
-        # Fall back to access token
         if access_token:
             try:
                 set_auth_token(access_token)
                 response = client.auth.get_user(access_token)
                 if response and response.user:
-                    st.session_state[_USER_KEY]  = response.user
-                    st.session_state[_TOKEN_KEY] = access_token
+                    st.session_state[_USER_KEY]    = response.user
+                    st.session_state[_TOKEN_KEY]   = access_token
                     profile = get_profile(response.user.id)
                     st.session_state[_PROFILE_KEY] = profile
                     return True
@@ -154,10 +142,8 @@ def sign_up(
 ) -> tuple[bool, str]:
     """
     Create a new Supabase auth user and profile.
-
-    Returns
-    -------
-    (success, message)
+    Profile is created using service role client to bypass RLS —
+    this works even when email confirmation is pending.
     """
     client = get_client()
 
@@ -172,21 +158,30 @@ def sign_up(
 
         user_id = response.user.id
 
-        create_profile(
-            user_id=user_id,
-            name=name,
-            email=email,
-            city=city,
-            daily_commute_km=daily_commute_km,
-            has_home_charging=has_home_charging,
-            driving_style=driving_style,
-        )
+        # Create profile using service role to bypass RLS
+        # Works whether email confirmation is ON or OFF
+        try:
+            create_profile(
+                user_id=user_id,
+                name=name,
+                email=email,
+                city=city,
+                daily_commute_km=daily_commute_km,
+                has_home_charging=has_home_charging,
+                driving_style=driving_style,
+            )
+        except Exception as profile_error:
+            # Profile creation failed but account was created
+            # Log it but don't fail the signup
+            print(f"[auth] Profile creation failed: {profile_error}")
 
+        # If session exists (email confirmation OFF), store it
         if response.session:
             _store_session(response)
             return True, "Account created successfully!"
 
-        return True, "Account created! Please log in."
+        # Email confirmation is ON — user needs to verify email
+        return True, "Account created! Please check your email."
 
     except Exception as e:
         error_msg = str(e)
@@ -204,10 +199,7 @@ def sign_up(
 def sign_in(email: str, password: str) -> tuple[bool, str]:
     """
     Sign in with email and password.
-
-    Returns
-    -------
-    (success, message)
+    Also creates profile if missing (edge case: profile creation failed at signup).
     """
     client = get_client()
 
@@ -221,6 +213,22 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
             return False, "Invalid email or password."
 
         _store_session(response)
+
+        # Safety net — create profile if it doesn't exist
+        # (handles case where profile creation failed during signup)
+        user_id = response.user.id
+        profile = get_profile(user_id)
+        if not profile:
+            try:
+                create_profile(
+                    user_id=user_id,
+                    name=email.split("@")[0],
+                    email=email,
+                )
+                st.session_state[_PROFILE_KEY] = get_profile(user_id)
+            except Exception as e:
+                print(f"[auth] Profile creation on login failed: {e}")
+
         return True, "Welcome back!"
 
     except Exception as e:
@@ -228,7 +236,11 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
         if "invalid" in error_msg.lower() or "credentials" in error_msg.lower():
             return False, "Invalid email or password."
         if "email" in error_msg.lower() and "confirm" in error_msg.lower():
-            return False, "Please confirm your email before logging in."
+            return (
+                False,
+                "Please verify your email first. "
+                "Check your inbox for the verification link from GenEV.",
+            )
         return False, f"Login error: {error_msg}"
 
 
@@ -244,10 +256,8 @@ def sign_out() -> None:
     except Exception:
         pass
 
-    # Clear browser cookie
     _clear_cookie()
 
-    # Clear session state
     for key in [_SESSION_KEY, _USER_KEY, _PROFILE_KEY, _TOKEN_KEY]:
         if key in st.session_state:
             del st.session_state[key]
@@ -274,7 +284,6 @@ def _store_session(response) -> None:
     profile = get_profile(response.user.id)
     st.session_state[_PROFILE_KEY] = profile
 
-    # Persist to cookie for refresh/reopen persistence
     _save_to_cookie(
         response.session.access_token,
         response.session.refresh_token,
@@ -282,12 +291,7 @@ def _store_session(response) -> None:
 
 
 def restore_session() -> bool:
-    """
-    Attempt to restore session.
-    Order: session state token → browser cookie.
-    Returns True if session is valid.
-    """
-    # 1. Try existing session state token (same tab, no refresh)
+    """Attempt to restore session from state or cookie."""
     token = st.session_state.get(_TOKEN_KEY)
     if token:
         try:
@@ -295,14 +299,13 @@ def restore_session() -> bool:
             client   = get_client()
             response = client.auth.get_user(token)
             if response and response.user:
-                st.session_state[_USER_KEY] = response.user
+                st.session_state[_USER_KEY]    = response.user
                 profile = get_profile(response.user.id)
                 st.session_state[_PROFILE_KEY] = profile
                 return True
         except Exception:
             pass
 
-    # 2. Try browser cookie (after refresh or reopen)
     return _restore_from_cookie()
 
 
@@ -328,15 +331,13 @@ def get_user_email() -> Optional[str]:
 
 
 def get_profile_cached() -> Optional[dict]:
-    """Get profile from cache or fetch fresh from Supabase."""
+    """Get profile from cache or fetch fresh."""
     profile = st.session_state.get(_PROFILE_KEY)
     if profile:
         return profile
-
     user_id = get_user_id()
     if not user_id:
         return None
-
     profile = get_profile(user_id)
     st.session_state[_PROFILE_KEY] = profile
     return profile

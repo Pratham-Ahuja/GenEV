@@ -5,7 +5,7 @@ Supabase connection and all database operations for GenEV 2.0.
 
 Covers
 ------
-- Connection singleton
+- Connection singleton (anon client + service role client)
 - Profile operations (create, read, update)
 - Simulation run operations (save, fetch, delete)
 - Chat history operations (save, fetch, clear)
@@ -17,18 +17,19 @@ from datetime import date
 from typing import Optional
 from supabase import create_client, Client
 
-from config import SUPABASE_URL, SUPABASE_ANON_KEY
+from config import SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Connection singleton
+# Connection singletons
 # ─────────────────────────────────────────────────────────────────────────────
 
-_client: Optional[Client] = None
+_client:         Optional[Client] = None
+_service_client: Optional[Client] = None
 
 
 def get_client() -> Client:
-    """Return a singleton Supabase client."""
+    """Return singleton Supabase anon client."""
     global _client
     if _client is None:
         if not SUPABASE_URL or not SUPABASE_ANON_KEY:
@@ -39,11 +40,24 @@ def get_client() -> Client:
     return _client
 
 
+def get_service_client() -> Client:
+    """
+    Return singleton Supabase service role client.
+    Bypasses RLS — use only for trusted server-side operations
+    like profile creation during signup.
+    """
+    global _service_client
+    if _service_client is None:
+        if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set"
+            )
+        _service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    return _service_client
+
+
 def set_auth_token(access_token: str) -> None:
-    """
-    Inject user's auth token into the client so RLS policies
-    apply correctly for that user's session.
-    """
+    """Inject user's auth token into the anon client."""
     client = get_client()
     client.postgrest.auth(access_token)
 
@@ -53,7 +67,7 @@ def set_auth_token(access_token: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _invalidate_profile_cache() -> None:
-    """Clear cached profile from session state so next read is fresh."""
+    """Clear cached profile from session state."""
     try:
         import streamlit as st
         if "genev_profile" in st.session_state:
@@ -75,10 +89,15 @@ def create_profile(
     has_home_charging: bool = False,
     driving_style: str = "moderate",
 ) -> dict:
-    """Create a new user profile after signup."""
-    client = get_client()
+    """
+    Create a new user profile after signup.
+    Uses service role client to bypass RLS — safe because
+    this is called server-side immediately after user creation.
+    """
+    # Use service role client to bypass RLS during signup
+    client = get_service_client()
     today  = str(date.today())
-    data = {
+    data   = {
         "id":                     user_id,
         "name":                   name,
         "email":                  email,
@@ -97,7 +116,7 @@ def create_profile(
 
 def get_profile(user_id: str) -> Optional[dict]:
     """Fetch a user's profile directly from Supabase (never cached)."""
-    client = get_client()
+    client   = get_client()
     response = (
         client.table("profiles")
         .select("*")
@@ -109,7 +128,7 @@ def get_profile(user_id: str) -> Optional[dict]:
 
 def update_profile(user_id: str, updates: dict) -> dict:
     """Update specific fields of a user profile."""
-    client = get_client()
+    client   = get_client()
     response = (
         client.table("profiles")
         .update(updates)
@@ -125,14 +144,10 @@ def update_profile(user_id: str, updates: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _reset_usage_if_needed(profile: dict) -> dict:
-    """
-    Reset daily usage counters if the reset date is before today.
-    Also fixes profiles that have NULL or missing reset dates.
-    """
+    """Reset daily usage counters if the reset date is before today."""
     today      = str(date.today())
     reset_date = profile.get("usage_reset_date")
 
-    # Normalise — date objects vs strings
     if reset_date and not isinstance(reset_date, str):
         reset_date = str(reset_date)
 
@@ -152,38 +167,26 @@ def _reset_usage_if_needed(profile: dict) -> dict:
 
 
 def check_simulation_limit(user_id: str) -> tuple[bool, int, int]:
-    """
-    Check if user can run another simulation.
-
-    Returns
-    -------
-    (allowed, used_today, daily_limit)
-    """
+    """Check if user can run another simulation."""
     from config import FREE_SIMULATIONS_PER_DAY, PREMIUM_SIMULATIONS_PER_DAY
 
     profile = get_profile(user_id)
-
     if not profile:
         return True, 0, FREE_SIMULATIONS_PER_DAY
 
     profile = _reset_usage_if_needed(profile)
-
-    plan  = profile.get("subscription_plan", "free")
-    limit = (
+    plan    = profile.get("subscription_plan", "free")
+    limit   = (
         PREMIUM_SIMULATIONS_PER_DAY
         if plan == "premium"
         else FREE_SIMULATIONS_PER_DAY
     )
     used = profile.get("simulations_used_today", 0) or 0
-
     return used < limit, used, limit
 
 
 def increment_simulation_count(user_id: str) -> None:
-    """
-    Increment simulation count for today.
-    Always fetches fresh from DB — never uses cache.
-    """
+    """Increment simulation count for today."""
     profile = get_profile(user_id)
     if not profile:
         return
@@ -194,38 +197,26 @@ def increment_simulation_count(user_id: str) -> None:
 
 
 def check_question_limit(user_id: str) -> tuple[bool, int, int]:
-    """
-    Check if user can ask another AI question.
-
-    Returns
-    -------
-    (allowed, used_today, daily_limit)
-    """
+    """Check if user can ask another AI question."""
     from config import FREE_QUESTIONS_PER_DAY, PREMIUM_QUESTIONS_PER_DAY
 
     profile = get_profile(user_id)
-
     if not profile:
         return True, 0, FREE_QUESTIONS_PER_DAY
 
     profile = _reset_usage_if_needed(profile)
-
-    plan  = profile.get("subscription_plan", "free")
-    limit = (
+    plan    = profile.get("subscription_plan", "free")
+    limit   = (
         PREMIUM_QUESTIONS_PER_DAY
         if plan == "premium"
         else FREE_QUESTIONS_PER_DAY
     )
     used = profile.get("questions_used_today", 0) or 0
-
     return used < limit, used, limit
 
 
 def increment_question_count(user_id: str) -> None:
-    """
-    Increment question count for today.
-    Always fetches fresh from DB — never uses cache.
-    """
+    """Increment question count for today."""
     profile = get_profile(user_id)
     if not profile:
         return
@@ -248,10 +239,7 @@ def save_simulation_run(
     telemetry: list[dict],
     duration_sec: float = 0.0,
 ) -> str:
-    """
-    Save a simulation run to Supabase.
-    Returns the new run UUID.
-    """
+    """Save a simulation run. Returns the new run UUID."""
     client = get_client()
 
     clean_telemetry = []
@@ -275,8 +263,8 @@ def save_simulation_run(
 
 
 def get_all_simulation_runs(user_id: str, limit: int = 50) -> list[dict]:
-    """Fetch all simulation runs for a user (no telemetry — summary only)."""
-    client = get_client()
+    """Fetch all simulation runs for a user (summary only)."""
+    client   = get_client()
     response = (
         client.table("simulation_runs_v2")
         .select("id, created_at, prompt, metrics")
@@ -290,7 +278,7 @@ def get_all_simulation_runs(user_id: str, limit: int = 50) -> list[dict]:
 
 def get_simulation_run_by_id(run_id: str, user_id: str) -> Optional[dict]:
     """Fetch a single simulation run by ID (with telemetry)."""
-    client = get_client()
+    client   = get_client()
     response = (
         client.table("simulation_runs_v2")
         .select("*")
@@ -301,13 +289,11 @@ def get_simulation_run_by_id(run_id: str, user_id: str) -> Optional[dict]:
     if not response.data:
         return None
 
-    run = response.data[0]
-
+    run       = response.data[0]
     telemetry = run.get("telemetry", [])
     for row in telemetry:
         row["is_charging"] = bool(row.get("is_charging", False))
     run["telemetry"] = telemetry
-
     return run
 
 
@@ -315,7 +301,7 @@ def get_runs_for_comparison(
     run_ids: list[str],
     user_id: str,
 ) -> list[dict]:
-    """Fetch multiple runs for comparison — all must belong to user."""
+    """Fetch multiple runs for comparison."""
     return [
         r for rid in run_ids
         if (r := get_simulation_run_by_id(rid, user_id)) is not None
@@ -323,7 +309,7 @@ def get_runs_for_comparison(
 
 
 def delete_simulation_run(run_id: str, user_id: str) -> None:
-    """Delete a simulation run (only if it belongs to the user)."""
+    """Delete a simulation run."""
     client = get_client()
     client.table("simulation_runs_v2") \
         .delete() \
@@ -345,7 +331,7 @@ def save_chat_message(
 ) -> None:
     """Save a Q&A pair to chat history."""
     client = get_client()
-    data = {
+    data   = {
         "user_id":            user_id,
         "question":           question,
         "answer":             answer,
@@ -357,7 +343,7 @@ def save_chat_message(
 
 def get_chat_history(user_id: str, limit: int = 20) -> list[dict]:
     """Fetch recent chat history for a user."""
-    client = get_client()
+    client   = get_client()
     response = (
         client.table("chat_history")
         .select("question, answer, sources, created_at")
@@ -390,7 +376,7 @@ def save_feedback(
 ) -> None:
     """Save user feedback or bug report."""
     client = get_client()
-    data = {
+    data   = {
         "user_id":       user_id,
         "feedback_type": feedback_type,
         "message":       message,
