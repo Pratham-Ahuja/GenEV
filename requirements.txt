@@ -28,3 +28,4 @@ bcrypt>=4.1.0
 
 # ── Session ───────────────────────────────────────────────────────────────────
 streamlit-cookies-manager>=0.2.0
+streamlit-js-eval>=0.1.7
