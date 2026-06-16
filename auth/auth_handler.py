@@ -29,76 +29,74 @@ from database.supabase_client import (
 # Session state keys
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SESSION_KEY     = "genev_session"
-_USER_KEY        = "genev_user"
-_PROFILE_KEY     = "genev_profile"
-_TOKEN_KEY       = "genev_access_token"
-_COOKIE_PASSWORD = "genev_secret_cookie_key_2025"
-_COOKIE_PREFIX   = "genev_"
+_SESSION_KEY = "genev_session"
+_USER_KEY    = "genev_user"
+_PROFILE_KEY = "genev_profile"
+_TOKEN_KEY   = "genev_access_token"
+
+_LS_ACCESS_KEY  = "genev_access_token"
+_LS_REFRESH_KEY = "genev_refresh_token"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cookie manager
+# localStorage persistence
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_cookies():
-    """Get the encrypted cookie manager instance."""
+def _save_to_storage(access_token: str, refresh_token: str) -> None:
+    """Save tokens to browser localStorage."""
     try:
-        from streamlit_cookies_manager import EncryptedCookieManager
-        cookies = EncryptedCookieManager(
-            prefix=_COOKIE_PREFIX,
-            password=_COOKIE_PASSWORD,
+        from streamlit_js_eval import streamlit_js_eval
+        streamlit_js_eval(
+            js_expressions=f"localStorage.setItem('{_LS_ACCESS_KEY}', '{access_token}'); "
+                           f"localStorage.setItem('{_LS_REFRESH_KEY}', '{refresh_token}');",
+            key="save_tokens",
         )
-        return cookies
-    except ImportError:
-        print("[auth] streamlit-cookies-manager not installed.")
+    except Exception as e:
+        print(f"[auth] localStorage save failed: {e}")
+
+
+def _clear_storage() -> None:
+    """Clear auth tokens from browser localStorage."""
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+        streamlit_js_eval(
+            js_expressions=f"localStorage.removeItem('{_LS_ACCESS_KEY}'); "
+                           f"localStorage.removeItem('{_LS_REFRESH_KEY}');",
+            key="clear_tokens",
+        )
+    except Exception as e:
+        print(f"[auth] localStorage clear failed: {e}")
+
+
+def _get_from_storage(key: str, state_key: str) -> Optional[str]:
+    """Read a single value from browser localStorage."""
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+        val = streamlit_js_eval(
+            js_expressions=f"localStorage.getItem('{key}')",
+            key=state_key,
+        )
+        return val if val and val != "null" else None
+    except Exception as e:
+        print(f"[auth] localStorage read failed: {e}")
         return None
-    except Exception as e:
-        print(f"[auth] Cookie manager init failed: {e}")
-        return None
 
 
-def _save_to_cookie(access_token: str, refresh_token: str) -> None:
-    """Save tokens to browser cookie for persistence."""
+def _restore_from_storage() -> bool:
+    """
+    Try to restore session from browser localStorage.
+    Uses refresh_token first, then access_token as fallback.
+    """
     try:
-        cookies = _get_cookies()
-        if cookies is None or not cookies.ready():
-            return
-        cookies["access_token"]  = access_token
-        cookies["refresh_token"] = refresh_token
-        cookies.save()
-    except Exception as e:
-        print(f"[auth] Cookie save failed: {e}")
-
-
-def _clear_cookie() -> None:
-    """Clear auth tokens from browser cookie."""
-    try:
-        cookies = _get_cookies()
-        if cookies is None or not cookies.ready():
-            return
-        cookies["access_token"]  = ""
-        cookies["refresh_token"] = ""
-        cookies.save()
-    except Exception as e:
-        print(f"[auth] Cookie clear failed: {e}")
-
-
-def _restore_from_cookie() -> bool:
-    """Try to restore session from browser cookie."""
-    try:
-        cookies = _get_cookies()
-        if cookies is None or not cookies.ready():
-            return False
-
-        refresh_token = cookies.get("refresh_token", "")
-        access_token  = cookies.get("access_token",  "")
+        refresh_token = _get_from_storage(_LS_REFRESH_KEY, "read_refresh_token")
+        access_token  = _get_from_storage(_LS_ACCESS_KEY,  "read_access_token")
 
         if not refresh_token and not access_token:
             return False
 
         client = get_client()
 
+        # Try refresh token first — most reliable
         if refresh_token:
             try:
                 response = client.auth.refresh_session(refresh_token)
@@ -108,6 +106,7 @@ def _restore_from_cookie() -> bool:
             except Exception:
                 pass
 
+        # Fall back to access token
         if access_token:
             try:
                 set_auth_token(access_token)
@@ -122,7 +121,7 @@ def _restore_from_cookie() -> bool:
                 pass
 
     except Exception as e:
-        print(f"[auth] Cookie restore failed: {e}")
+        print(f"[auth] Storage restore failed: {e}")
 
     return False
 
@@ -142,8 +141,7 @@ def sign_up(
 ) -> tuple[bool, str]:
     """
     Create a new Supabase auth user and profile.
-    Profile is created using service role client to bypass RLS —
-    this works even when email confirmation is pending.
+    Profile is created using service role client to bypass RLS.
     """
     client = get_client()
 
@@ -158,8 +156,6 @@ def sign_up(
 
         user_id = response.user.id
 
-        # Create profile using service role to bypass RLS
-        # Works whether email confirmation is ON or OFF
         try:
             create_profile(
                 user_id=user_id,
@@ -171,22 +167,18 @@ def sign_up(
                 driving_style=driving_style,
             )
         except Exception as profile_error:
-            # Profile creation failed but account was created
-            # Log it but don't fail the signup
             print(f"[auth] Profile creation failed: {profile_error}")
 
-        # If session exists (email confirmation OFF), store it
         if response.session:
             _store_session(response)
             return True, "Account created successfully!"
 
-        # Email confirmation is ON — user needs to verify email
         return True, "Account created! Please check your email."
 
     except Exception as e:
         error_msg = str(e)
-        if "already registered" in error_msg.lower():
-            return False, "This email is already registered. Please log in."
+        if "already registered" in error_msg.lower() or "user already registered" in error_msg.lower():
+            return False, "An account with this email already exists. Please log in."
         if "password" in error_msg.lower():
             return False, "Password must be at least 6 characters."
         return False, f"Signup error: {error_msg}"
@@ -197,10 +189,7 @@ def sign_up(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sign_in(email: str, password: str) -> tuple[bool, str]:
-    """
-    Sign in with email and password.
-    Also creates profile if missing (edge case: profile creation failed at signup).
-    """
+    """Sign in with email and password."""
     client = get_client()
 
     try:
@@ -214,8 +203,7 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
 
         _store_session(response)
 
-        # Safety net — create profile if it doesn't exist
-        # (handles case where profile creation failed during signup)
+        # Safety net — create profile if missing
         user_id = response.user.id
         profile = get_profile(user_id)
         if not profile:
@@ -249,14 +237,14 @@ def sign_in(email: str, password: str) -> tuple[bool, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sign_out() -> None:
-    """Sign out current user and clear session state + cookies."""
+    """Sign out current user and clear session state + localStorage."""
     try:
         client = get_client()
         client.auth.sign_out()
     except Exception:
         pass
 
-    _clear_cookie()
+    _clear_storage()
 
     for key in [_SESSION_KEY, _USER_KEY, _PROFILE_KEY, _TOKEN_KEY]:
         if key in st.session_state:
@@ -274,7 +262,7 @@ def sign_out() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _store_session(response) -> None:
-    """Store auth session in Streamlit state and browser cookie."""
+    """Store auth session in Streamlit state and localStorage."""
     st.session_state[_SESSION_KEY] = response.session
     st.session_state[_USER_KEY]    = response.user
     st.session_state[_TOKEN_KEY]   = response.session.access_token
@@ -284,14 +272,15 @@ def _store_session(response) -> None:
     profile = get_profile(response.user.id)
     st.session_state[_PROFILE_KEY] = profile
 
-    _save_to_cookie(
+    _save_to_storage(
         response.session.access_token,
         response.session.refresh_token,
     )
 
 
 def restore_session() -> bool:
-    """Attempt to restore session from state or cookie."""
+    """Attempt to restore session from state or localStorage."""
+    # 1. Try existing session state token
     token = st.session_state.get(_TOKEN_KEY)
     if token:
         try:
@@ -306,7 +295,8 @@ def restore_session() -> bool:
         except Exception:
             pass
 
-    return _restore_from_cookie()
+    # 2. Try localStorage
+    return _restore_from_storage()
 
 
 def is_logged_in() -> bool:
