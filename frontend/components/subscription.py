@@ -9,7 +9,9 @@ Sections
 2. render_current_plan()      — current plan status card
 3. render_usage_stats()       — daily usage breakdown
 4. render_pricing_cards()     — free vs premium comparison
-5. render_upgrade_modal()     — upgrade CTA with Razorpay-ready button
+5. render_upgrade_section()   — premium code activation + contact
+6. render_premium_active()    — premium active confirmation
+7. render_faq()               — frequently asked questions
 """
 
 import streamlit as st
@@ -26,6 +28,10 @@ from database.supabase_client import (
     check_simulation_limit,
     check_question_limit,
     update_profile,
+    generate_premium_code,
+    get_premium_code_status,
+    validate_and_activate_premium,
+    check_and_expire_premium,
 )
 from config import (
     FREE_SIMULATIONS_PER_DAY,
@@ -49,6 +55,9 @@ def render_subscription_page() -> None:
         st.warning("Please log in to view subscription details.", icon="⚠️")
         return
 
+    # Check and expire premium if billing period ended
+    check_and_expire_premium(user_id)
+
     st.markdown("## 💎 Plans & Pricing")
     st.markdown(
         "<p style='color:#64748B;font-size:13px;margin-bottom:20px;'>"
@@ -56,25 +65,19 @@ def render_subscription_page() -> None:
         unsafe_allow_html=True,
     )
 
-    # Current plan + usage
     render_current_plan()
     st.divider()
     render_usage_stats(user_id)
     st.divider()
-
-    # Pricing cards
     render_pricing_cards()
     st.divider()
 
-    # Upgrade section
     if not is_premium():
-        render_upgrade_section()
+        render_upgrade_section(user_id)
     else:
-        render_premium_active()
+        render_premium_active(user_id)
 
     st.divider()
-
-    # FAQ
     render_faq()
 
 
@@ -130,11 +133,10 @@ def render_usage_stats(user_id: str) -> None:
     """Render today's usage breakdown."""
     st.markdown("### 📊 Today's Usage")
 
-    sim_allowed, sim_used, sim_limit   = check_simulation_limit(user_id)
-    q_allowed,   q_used,   q_limit     = check_question_limit(user_id)
+    sim_allowed, sim_used, sim_limit = check_simulation_limit(user_id)
+    q_allowed,   q_used,   q_limit   = check_question_limit(user_id)
 
     col1, col2 = st.columns(2)
-
     with col1:
         _render_usage_bar(
             label="Simulations",
@@ -143,7 +145,6 @@ def render_usage_stats(user_id: str) -> None:
             icon="🧪",
             color="#1D9E75" if sim_allowed else "#DC2626",
         )
-
     with col2:
         _render_usage_bar(
             label="AI Questions",
@@ -153,7 +154,6 @@ def render_usage_stats(user_id: str) -> None:
             color="#1D9E75" if q_allowed else "#DC2626",
         )
 
-    # Reset info
     st.markdown(
         f'<p style="font-size:11px;color:#94A3B8;margin-top:6px;">'
         f'🔄 Usage resets daily at midnight · Today: {date.today().strftime("%B %d, %Y")}'
@@ -169,8 +169,7 @@ def _render_usage_bar(
     icon: str,
     color: str,
 ) -> None:
-    """Render a single usage progress bar."""
-    pct   = min(100, int((used / limit) * 100)) if limit > 0 else 100
+    pct       = min(100, int((used / limit) * 100)) if limit > 0 else 100
     remaining = max(0, limit - used)
 
     if limit >= 999:
@@ -208,9 +207,7 @@ def _render_usage_bar(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_pricing_cards() -> None:
-    """Render side-by-side free vs premium pricing cards."""
     st.markdown("### 🏷️ Plans")
-
     col1, col2 = st.columns(2)
 
     with col1:
@@ -223,7 +220,6 @@ def render_pricing_cards() -> None:
             highlight=False,
             badge="Current Plan" if not is_premium() else "",
         )
-
     with col2:
         _render_plan_card(
             name="GenEV Premium",
@@ -245,7 +241,6 @@ def _render_plan_card(
     highlight: bool,
     badge: str = "",
 ) -> None:
-    """Render a single plan card."""
     border  = "#7C3AED" if highlight else "#E2E8F0"
     bg      = "rgba(124,58,237,0.03)" if highlight else "#F8FAFC"
     heading = "#7C3AED" if highlight else "#1E293B"
@@ -291,142 +286,157 @@ def _render_plan_card(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Upgrade section
+# Upgrade section — premium code system
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_upgrade_section() -> None:
-    """Render upgrade CTA section."""
+def render_upgrade_section(user_id: str) -> None:
+    """Render upgrade section with unique code generation and activation."""
     st.markdown("### 🚀 Upgrade to Premium")
 
+    # ── Step 1: Show/generate user's unique code ──────────────────────────────
     st.markdown(
-        f'<div style="background:linear-gradient(135deg,'
-        f'rgba(124,58,237,0.08),rgba(29,158,117,0.08));'
-        f'border:1px solid rgba(124,58,237,0.20);'
-        f'border-radius:16px;padding:24px;margin-bottom:16px;">'
-        f'<div style="font-size:18px;font-weight:700;color:#1E293B;'
-        f'margin-bottom:8px;">Unlock GenEV AI Intelligence</div>'
-        f'<div style="font-size:13px;color:#475569;line-height:1.7;'
+        '<div style="background:rgba(124,58,237,0.06);'
+        'border:1px solid rgba(124,58,237,0.20);'
+        'border-radius:14px;padding:20px 24px;margin-bottom:16px;">'
+        '<div style="font-size:15px;font-weight:700;color:#1E293B;'
+        'margin-bottom:10px;">Step 1 — Get your unique payment code</div>'
+        '<div style="font-size:13px;color:#475569;line-height:1.7;">'
+        'Your unique code below is linked to your account. '
+        'Share it with us when making the payment so we can activate '
+        'your Premium access.'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Generate or fetch existing code
+    with st.spinner("Loading your code..."):
+        code_record = get_premium_code_status(user_id)
+        if not code_record:
+            user_code = generate_premium_code(user_id)
+        else:
+            user_code = code_record["code"]
+
+    st.markdown(
+        f'<div style="background:#F8FAFC;border:2px dashed #7C3AED;'
+        f'border-radius:12px;padding:16px;text-align:center;'
         f'margin-bottom:16px;">'
-        f'Get {PREMIUM_QUESTIONS_PER_DAY} AI-powered EV questions per day, '
-        f'unlimited simulations, PDF report exports, and priority '
-        f'AI responses — all for just '
-        f'<strong>₹{PREMIUM_PRICE_INR}/month</strong>.'
+        f'<div style="font-size:11px;color:#64748B;margin-bottom:6px;">'
+        f'YOUR UNIQUE PREMIUM CODE</div>'
+        f'<div style="font-size:24px;font-weight:800;color:#7C3AED;'
+        f'letter-spacing:0.1em;">{user_code}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Step 2: Payment instructions ─────────────────────────────────────────
+    st.markdown(
+        f'<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
+        f'border-radius:14px;padding:20px 24px;margin-bottom:16px;">'
+        f'<div style="font-size:15px;font-weight:700;color:#1E293B;'
+        f'margin-bottom:12px;">Step 2 — Make payment</div>'
+        f'<div style="font-size:13px;color:#475569;line-height:2;">'
+        f'💰 Amount: <strong>₹{PREMIUM_PRICE_INR}/month</strong><br>'
+        f'📧 Send payment to: <strong>prathamahuja924@gmail.com</strong><br>'
+        f'📝 Email subject: <strong>GenEV Premium — {user_code}</strong><br>'
+        f'🧾 Include: Your name, transaction ID, and the code above'
         f'</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button(
-            f"⭐ Upgrade to Premium — ₹{PREMIUM_PRICE_INR}/month",
-            use_container_width=True,
-            key="upgrade_btn",
-        ):
-            _handle_upgrade()
-
+    # ── Step 3: Activate with code ────────────────────────────────────────────
     st.markdown(
-        '<p style="text-align:center;font-size:11px;color:#94A3B8;'
-        'margin-top:8px;">🔒 Secure payment · Cancel anytime · '
-        'Instant activation</p>',
+        '<div style="background:#F8FAFC;border:1px solid #E2E8F0;'
+        'border-radius:14px;padding:20px 24px;margin-bottom:16px;">'
+        '<div style="font-size:15px;font-weight:700;color:#1E293B;'
+        'margin-bottom:10px;">Step 3 — Activate after payment confirmation</div>'
+        '<div style="font-size:13px;color:#475569;margin-bottom:12px;">'
+        'Once we confirm your payment (usually within a few hours), '
+        'enter your code below to activate Premium.'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
-
-def _handle_upgrade() -> None:
-    """
-    Handle upgrade button click.
-    Currently shows demo activation — Razorpay integration ready.
-    """
-    st.markdown("---")
-    st.markdown("### 💳 Complete Your Upgrade")
-
-    st.info(
-        "**Payment Gateway Coming Soon**\n\n"
-        "Razorpay integration is being set up. "
-        "For early access, contact us at "
-        "prathamahuja924@gmail.com with subject "
-        "'GenEV Premium Access'.",
-        icon="ℹ️",
-    )
-
-    # Demo activation for testing
-    st.markdown("**Demo Mode — Activate Premium for Testing:**")
-
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([2, 1])
     with col1:
-        demo_code = st.text_input(
-            "Enter demo code",
-            placeholder="GENEV_PREMIUM_DEMO",
-            key="demo_code_input",
+        entered_code = st.text_input(
+            "Enter your premium code",
+            placeholder=f"e.g. {user_code}",
+            key="premium_code_input",
         )
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Activate Demo", key="activate_demo"):
-            if demo_code.strip().upper() == "GENEV_PREMIUM_DEMO":
-                _activate_premium_demo()
+        if st.button("⭐ Activate Premium", key="activate_premium_btn",
+                     use_container_width=True):
+            if not entered_code.strip():
+                st.error("Please enter your premium code.", icon="⚠️")
             else:
-                st.error("Invalid demo code.", icon="🔴")
+                with st.spinner("Verifying code..."):
+                    success, message = validate_and_activate_premium(
+                        user_id, entered_code.strip()
+                    )
+                if success:
+                    st.success(message, icon="✅")
+                    st.balloons()
+                    refresh_profile()
+                    st.rerun()
+                else:
+                    st.error(message, icon="🔴")
 
-
-def _activate_premium_demo() -> None:
-    """Activate premium for demo/testing purposes."""
-    user_id = get_user_id()
-    if not user_id:
-        return
-
-    try:
-        update_profile(user_id, {"subscription_plan": "premium"})
-        refresh_profile()
-        st.success(
-            "🎉 Premium activated! Enjoy all GenEV features.",
-            icon="✅",
-        )
-        st.balloons()
-        st.rerun()
-    except Exception as e:
-        st.error(f"Activation failed: {e}", icon="🔴")
+    st.markdown(
+        '<p style="font-size:11px;color:#94A3B8;margin-top:8px;">'
+        '🔒 Your code is unique to your account and cannot be used by anyone else.'
+        '</p>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Premium active section
 # ─────────────────────────────────────────────────────────────────────────────
 
-def render_premium_active() -> None:
-    """Show premium active confirmation."""
+def render_premium_active(user_id: str) -> None:
+    """Show premium active status with billing info."""
+    code_record = get_premium_code_status(user_id)
+    billing_end = code_record.get("billing_period_end") if code_record else None
+
+    billing_str = ""
+    if billing_end:
+        billing_str = (
+            f'<br><div style="font-size:12px;color:#7C3AED;margin-top:6px;">'
+            f'📅 Valid until: <strong>{billing_end}</strong></div>'
+        )
+
     st.markdown(
-        '<div style="background:rgba(124,58,237,0.06);'
-        'border:1px solid rgba(124,58,237,0.25);'
-        'border-radius:14px;padding:20px 24px;text-align:center;">'
-        '<div style="font-size:28px;margin-bottom:8px;">⭐</div>'
-        '<div style="font-size:17px;font-weight:700;color:#7C3AED;'
-        'margin-bottom:6px;">Premium Active</div>'
-        '<div style="font-size:13px;color:#475569;">'
-        'You have full access to all GenEV features including '
-        'unlimited AI questions and PDF exports.</div>'
-        '</div>',
+        f'<div style="background:rgba(124,58,237,0.06);'
+        f'border:1px solid rgba(124,58,237,0.25);'
+        f'border-radius:14px;padding:20px 24px;text-align:center;">'
+        f'<div style="font-size:28px;margin-bottom:8px;">⭐</div>'
+        f'<div style="font-size:17px;font-weight:700;color:#7C3AED;'
+        f'margin-bottom:6px;">Premium Active</div>'
+        f'<div style="font-size:13px;color:#475569;">'
+        f'You have full access to all GenEV features including '
+        f'unlimited AI questions and PDF exports.'
+        f'{billing_str}'
+        f'</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Manage subscription
     with st.expander("⚙️ Manage Subscription"):
         st.markdown(
-            "To cancel or modify your subscription, contact us at "
+            "To renew or cancel your subscription, contact us at "
             "**prathamahuja924@gmail.com** with subject "
             "'GenEV Subscription'."
         )
-        if st.button(
-            "Downgrade to Free",
-            key="downgrade_btn",
-        ):
-            user_id = get_user_id()
-            if user_id:
-                update_profile(user_id, {"subscription_plan": "free"})
-                refresh_profile()
-                st.success("Downgraded to Free plan.", icon="✅")
-                st.rerun()
+        if code_record:
+            st.markdown(
+                f"Your premium code: **{code_record.get('code', 'N/A')}**"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -434,10 +444,21 @@ def render_premium_active() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def render_faq() -> None:
-    """Render frequently asked questions."""
     st.markdown("### ❓ Frequently Asked Questions")
 
     faqs = [
+        (
+            "How does the Premium activation work?",
+            "You get a unique code linked to your account. Make payment and "
+            "email us with your code and transaction ID. Once we confirm payment, "
+            "we mark it as received and you activate Premium by entering your code.",
+        ),
+        (
+            "What happens when my billing period ends?",
+            "Your Premium access is automatically disabled at the end of the "
+            "billing period. To renew, make another payment and email us. "
+            "We'll update your billing period and you can re-activate with the same code.",
+        ),
         (
             "What happens when I reach my daily limit?",
             "Free users can run 3 simulations and ask 1 AI question per day. "
@@ -445,27 +466,14 @@ def render_faq() -> None:
             f"and {PREMIUM_QUESTIONS_PER_DAY} AI questions per day.",
         ),
         (
-            "Is the Premium plan worth it?",
-            "If you use GenEV for serious EV research, buying decisions, "
-            "or academic work — Premium gives you deeper AI analysis through "
-            "10 questions/day, PDF reports you can save and share, "
-            "and unlimited simulation runs.",
+            "Is my simulation data private?",
+            "Yes. Row Level Security (RLS) ensures each user only sees "
+            "their own simulations, chat history, and profile data.",
         ),
         (
             "Can I cancel Premium anytime?",
             "Yes. Contact prathamahuja924@gmail.com to cancel. "
             "You retain Premium access until the end of your billing period.",
-        ),
-        (
-            "Is my simulation data private?",
-            "Yes. Row Level Security (RLS) ensures each user only sees "
-            "their own simulations, chat history, and profile data. "
-            "No other user can access your data.",
-        ),
-        (
-            "What payment methods are supported?",
-            "Razorpay integration (UPI, cards, net banking) is coming soon. "
-            "For early premium access, contact us directly.",
         ),
         (
             "Is GenEV free to use?",

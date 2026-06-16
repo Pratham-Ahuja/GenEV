@@ -11,9 +11,10 @@ Covers
 - Chat history operations (save, fetch, clear)
 - Feedback operations (save)
 - Usage tracking (simulations + questions per day)
+- Premium code operations
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from supabase import create_client, Client
 
@@ -43,8 +44,7 @@ def get_client() -> Client:
 def get_service_client() -> Client:
     """
     Return singleton Supabase service role client.
-    Bypasses RLS — use only for trusted server-side operations
-    like profile creation during signup.
+    Bypasses RLS — use only for trusted server-side operations.
     """
     global _service_client
     if _service_client is None:
@@ -91,10 +91,8 @@ def create_profile(
 ) -> dict:
     """
     Create a new user profile after signup.
-    Uses service role client to bypass RLS — safe because
-    this is called server-side immediately after user creation.
+    Uses service role client to bypass RLS.
     """
-    # Use service role client to bypass RLS during signup
     client = get_service_client()
     today  = str(date.today())
     data   = {
@@ -224,6 +222,156 @@ def increment_question_count(user_id: str) -> None:
     used    = profile.get("questions_used_today", 0) or 0
     update_profile(user_id, {"questions_used_today": used + 1})
     _invalidate_profile_cache()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Premium code operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_premium_code(user_id: str) -> str:
+    """
+    Generate a unique premium code for a user and store it.
+    Uses service role to bypass RLS.
+    If user already has a code, return the existing one.
+    """
+    import secrets
+    import string
+
+    client = get_service_client()
+
+    # Check if user already has a code
+    existing = (
+        client.table("premium_codes")
+        .select("code")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]["code"]
+
+    # Generate a unique 12-character code
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = "GENEV-" + "".join(secrets.choice(alphabet) for _ in range(8))
+        # Check uniqueness
+        check = (
+            client.table("premium_codes")
+            .select("id")
+            .eq("code", code)
+            .execute()
+        )
+        if not check.data:
+            break
+
+    # Insert new code
+    client.table("premium_codes").insert({
+        "user_id":        user_id,
+        "code":           code,
+        "payment_status": "pending",
+    }).execute()
+
+    return code
+
+
+def get_premium_code_status(user_id: str) -> Optional[dict]:
+    """
+    Get the premium code and its status for a user.
+    Returns dict with code, payment_status, billing_period_end or None.
+    """
+    client = get_service_client()
+    response = (
+        client.table("premium_codes")
+        .select("*")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def validate_and_activate_premium(user_id: str, code: str) -> tuple[bool, str]:
+    """
+    Validate a premium code entered by the user.
+
+    Rules:
+    - Code must exist and belong to this user
+    - payment_status must be 'yes'
+    - billing_period_end must be today or in the future
+
+    Returns (success, message)
+    """
+    client = get_service_client()
+
+    # Find the code
+    response = (
+        client.table("premium_codes")
+        .select("*")
+        .eq("code", code.strip().upper())
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    if not response.data:
+        return False, "Invalid code. This code does not belong to your account."
+
+    record = response.data[0]
+
+    # Check payment status
+    if record.get("payment_status") != "yes":
+        return (
+            False,
+            "Payment not yet confirmed. Please complete your payment and "
+            "contact prathamahuja924@gmail.com with your transaction details.",
+        )
+
+    # Check billing period
+    billing_end = record.get("billing_period_end")
+    if billing_end:
+        if isinstance(billing_end, str):
+            from datetime import datetime
+            billing_end = datetime.strptime(billing_end, "%Y-%m-%d").date()
+        if billing_end < date.today():
+            return (
+                False,
+                "Your Premium subscription has expired. "
+                "Please renew by contacting prathamahuja924@gmail.com.",
+            )
+
+    # All checks passed — activate premium
+    update_profile(user_id, {"subscription_plan": "premium"})
+    _invalidate_profile_cache()
+
+    end_str = str(billing_end) if billing_end else "end of billing period"
+    return True, f"Premium activated! Valid until {end_str}."
+
+
+def check_and_expire_premium(user_id: str) -> None:
+    """
+    Check if user's premium has expired and downgrade if needed.
+    Called on login and profile refresh.
+    """
+    profile = get_profile(user_id)
+    if not profile or profile.get("subscription_plan") != "premium":
+        return
+
+    code_record = get_premium_code_status(user_id)
+    if not code_record:
+        return
+
+    billing_end = code_record.get("billing_period_end")
+    payment_ok  = code_record.get("payment_status") == "yes"
+
+    if not payment_ok:
+        update_profile(user_id, {"subscription_plan": "free"})
+        _invalidate_profile_cache()
+        return
+
+    if billing_end:
+        if isinstance(billing_end, str):
+            from datetime import datetime
+            billing_end = datetime.strptime(billing_end, "%Y-%m-%d").date()
+        if billing_end < date.today():
+            update_profile(user_id, {"subscription_plan": "free"})
+            _invalidate_profile_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
